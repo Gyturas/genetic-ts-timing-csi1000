@@ -1,8 +1,0 @@
-__pycache__/
-*.pyc
-.DS_Store
-
-结果_挖矿/
-结果_正典复算/
-结果_等权/
-data_cache/panels_etf.pkl

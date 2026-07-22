@@ -1,8 +1,0 @@
-# 回测+出图段(引擎/策略.py 等)只需前四个:
-numpy
-pandas
-scipy
-matplotlib
-# 滚动挖矿+熊概率段(walkforward / ga_alpha / 更新熊概率.py)另需:
-scikit-learn   # 熊概率 elastic-net logit
-arch           # AR-GARCH 元老(波动率状态)

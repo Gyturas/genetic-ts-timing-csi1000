@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "csi1000"
+version = "4.0.0"
+description = "中证1000 时序择时(v4 定稿):GA 因子挖矿 + walk-forward 回测"
+requires-python = ">=3.10"
+# 回测+出图(engine.strategy 等)只需前四个;
+# 滚动挖矿+熊概率(walkforward / ga_alpha / update_bear_prob)另需后两个。
+dependencies = [
+    "numpy",
+    "pandas",
+    "scipy",
+    "matplotlib",
+    "scikit-learn",  # 熊概率 elastic-net logit
+    "arch",          # AR-GARCH 元老(波动率状态)
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

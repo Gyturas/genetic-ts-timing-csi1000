@@ -1,11 +1,17 @@
+# Python
 __pycache__/
 *.pyc
 .DS_Store
-data_cache/panels_etf.pkl
-*/data_cache/panels_etf.pkl
-# 可由 引擎.加权对比 从挖矿存档秒级重建的中间信号目录
-*/结果_正典/
-*/结果_截正等权/
-*/结果_等权/
-*/结果_纯等权/
-*/结果_cosIC/
+
+# 本地配置(不入库)
+.env
+.vscode/
+
+# 派生缓存(首次运行自建,不入库)
+data/cache/panels_etf.pkl
+results/mining/
+results/mine_no_elders/
+results/state/
+
+# 每日面板/临时产物
+*.command.log
