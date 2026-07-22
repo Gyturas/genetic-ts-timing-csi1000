@@ -1,0 +1,65 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.4cm]{geometry}
+\usepackage{amsmath,booktabs,threeparttable,setspace}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue!60!black]{hyperref}
+\onehalfspacing
+\title{\textbf{The Origins of Time-Series Timeability:\\ Cross-Asset AR--GARCH Evidence}\\
+\large ---Why CSI 1000 Timing Works, and Where It Can Be Replicated}
+\author{}
+\date{July 2026}
+
+\begin{document}
+\maketitle
+\vspace{-2.5em}
+\begin{abstract}
+\noindent Using daily data on 23 assets (Chinese broad equity indices, precious metals, commodity futures, overseas indices, and individual A-share stocks), we estimate an AR(1)--GARCH(1,1) model augmented with state-interaction terms to identify the statistical origins of time-series timing ability. Main findings: (i) the short-horizon momentum coefficient $\varphi_1$ has a rank correlation of $0.77$ ($p<0.01$) with realized timing-strategy performance, making it the primary discriminating variable; (ii) the conditional-volatility level term $\varphi_2$ (the ``volatility premium'') is about $+11$bp/day per standard deviation for the CSI 1000---the strongest in the sample---mirroring the fact that roughly 60\% of the genetically mined factor library consists of volatility-family factors; (iii) volatility predictability (GARCH persistence, Mincer--Zarnowitz $R^2$) is \emph{unrelated} to timing performance; (iv) at the individual-stock level $\varphi_1$ is uniformly negative: index-level positive autocorrelation is an emergent property of cross-sectional aggregation (lead--lag effects); (v) out-of-sample validation: the SZSE 2000 and CSI 2000 exhibit parameter structures nearly identical to---and stronger than---the CSI 1000, making them the top candidates for extending the framework.
+\end{abstract}
+
+\section{Model}
+The mean and volatility equations for log returns $r_t$ (in \%) are
+\begin{align}
+r_t &= \mu + \varphi_1 r_{t-1} + \varphi_L\, \tilde m_{t-1} + \varphi_2\, \tilde\sigma_{t-1} + \varphi_3\,(\tilde\sigma_{t-1}\cdot r_{t-1}) + \varepsilon_t, \\
+\varepsilon_t &= \sigma_t e_t,\qquad e_t \sim \mathrm{i.i.d.}\ N(0,1),\qquad
+\sigma_t^2 = \omega + \alpha\,\varepsilon_{t-1}^2 + \beta\,\sigma_{t-1}^2,
+\end{align}
+where $\tilde\sigma_{t-1}$ is the standardized conditional volatility (the state variable), $\tilde m_{t-1}$ is the standardized cumulative return over the past 244 trading days (long-horizon momentum), and the interaction $\tilde\sigma_{t-1}\cdot r_{t-1}$ captures volatility-state modulation of short-horizon autocorrelation: $\varphi_1 + \varphi_3\tilde\sigma_{t-1}$ is the time-varying first-order autocorrelation.
+
+Estimation is in two steps: first, an AR(1)--GARCH(1,1) extracts the conditional volatility $\hat\sigma_t$ used to construct the state variables; second, these enter the mean equation as exogenous regressors together with the interaction term, with GARCH(1,1) disturbances, estimated by QMLE. We report Bollerslev--Wooldridge robust $t$-statistics. All series start in 2010; observations with $|r_t|>25\%$ are discarded.
+
+\paragraph{Interpretation.}$\varphi_1>0$: daily momentum (yesterday's gain predicts today's gain); $\varphi_2>0$: positive risk compensation in high-volatility states (``panic-then-rebound''); $\varphi_L>0$: continuation of annual momentum; $\varphi_3<0$: stronger reversal in high-volatility states.
+
+\section{Data}
+Chinese index data, commodity front-month continuous contracts, and spot gold (au9999) come from the project's own price library; the SZSE 2000, CSI 2000, BSE 50, and six individual A-shares (split-adjusted) come from the EastMoney history API. The stocks span the size/investor-structure spectrum: Kweichow Moutai (mega-cap), Ping An Insurance (large-cap), Hualu Hengsheng (mid-cap), Innolight (large ChiNext), Leo Group and Guanghua Sci-Tech (small-caps).
+
+\section{Estimation Results}
+\input{tables_en.tex}
+
+Tables~\ref{tab:ashare_en}--\ref{tab:stk_en} report the group estimates; Table~\ref{tab:rank_en} correlates each parameter with the realized performance of the project's live timing strategy (genetically mined factor library with IC weighting, backtested 2018--2026). Four conclusions:
+
+\textbf{(1)~Short-horizon momentum $\varphi_1$ is the primary discriminator.} Rank correlation $+0.77$ ($p=0.004$). Chinese broad indices display a monotone gradient---CSI 1000 ($+0.055$, $t=2.7$) $>$ CSI 500 $>$ CSI 300 (insignificant)---exactly matching the realized ordering ``explosive $>$ moderate $>$ weak''. Commodities have uniformly negative $\varphi_1$ (daily reversal of 4--6bp, below round-trip costs); US indices are negative with high drift.
+
+\textbf{(2)~The volatility premium $\varphi_2$ is the second source.} CSI 1000: $+11.0$bp/day ($t=2.8$); CSI 300: negative. This maps directly onto the factor library's composition: about 60\% of in-service zz1000 factors are volatility-family (signals highly correlated with rolling volatility, direction ``long when volatility is high''), and all top-20 factors by cos IC belong to this family. The market's structure is what the genetic search grows into.
+
+\textbf{(3)~Volatility predictability is unrelated to timeability.} Rank correlations of GARCH persistence and MZ $R^2$ are insignificant. Moutai and the Nasdaq 100 have the most predictable volatility (MZ $R^2\approx0.27$--$0.32$) yet the least predictable direction. Being able to forecast volatility is not the same as being able to time.
+
+\textbf{(4)~Stock-level reversal coexists with index-level momentum: an emergent property of aggregation.} All six stocks have negative $\varphi_1$ (Hualu Hengsheng: $-0.055$, $t=-2.7$---same magnitude as the CSI 1000 with the opposite sign). Index-level positive autocorrelation does not arise from momentum in the constituents; idiosyncratic reversals cancel in the cross-section, leaving the lead--lag propagation of the common component (Lo--MacKinlay). \emph{Timeability lives at the aggregate level and does not survive disaggregation.}
+
+\section{Mechanisms and Corroborating In-Project Evidence}
+\textbf{Factor-library taxonomy.} Classifying each of the 79 in-service zz1000 factors by the regression feature its signal correlates with most: 47 volatility-family (mean cos IC $+0.079$), 17 momentum-family (mean $-0.018$), 0 interaction-family. The absence of interaction factors is consistent with the insignificant $\varphi_3$ ($t=0.25$): the structure does not exist in the market, and evolution correctly failed to produce it---evidence of \emph{not} overfitting.
+
+\textbf{Long momentum and the direction lock-in of the ``veteran'' factors.} $\varphi_L$ is weakly positive for the CSI 1000 ($+5.4$bp, $t=1.5$). The project's nine hand-crafted momentum factors (``veterans'') had their signs fixed at $-1$ once and for all during the 2013--14 warm-up and were never re-evaluated---precisely opposite to the post-2015 positive long momentum. Under the identical transformation, the raw momentum signal has cos IC $+0.051$ while the veterans realize $-0.054$: mirror images. Removing the seven in-service veterans raises portfolio annualized return from $20.7\%$ to $22.8\%$ (Sharpe $1.01\to1.11$); switching to cos IC weighting with veterans excluded yields $24.9\%$ (Sharpe $1.22$).
+
+\section{An Operational Definition of Timeability, and Extensions}
+\begin{quote}
+\textbf{Definition} (for daily momentum-family long--short timing algorithms): an asset is timeable if and only if
+(T1) $\varphi_1>0$ with $t>2$ and $\mathrm{VR}(5)>1.05$;
+(T2) $\varphi_2>0$ with $t>1.5$;
+(T3) buy-and-hold Sharpe $|SR|<0.3$ (low drift, so timing pays no ``drift tax'').
+\end{quote}
+Of the 23 assets, only the CSI 1000, CSI 500 (each item one notch weaker), and the \textbf{SZSE 2000 and CSI 2000} satisfy all three. The CSI 2000 is at least as strong as the CSI 1000 on every item ($\varphi_1=+0.054$, $\varphi_2=+10.8$bp, $\varphi_L=+10.6$bp and significant, VR(5)$=1.205$---the sample maximum), making it the top extension candidate. The BSE 50 sample is too short (853 days) to evaluate. Caveat: the 2000-tier indices have no index futures; the short leg must be implemented long-only or proxy-hedged with IM (CSI 1000) futures.
+
+\section{Limitations}
+(i) The state variables are generated regressors, so the $t$-statistics on $\varphi_2,\varphi_3$ are mildly overstated (Pagan, 1984); (ii) the rank-correlation sample contains only 12 assets, with ordinal, subjectively assigned performance ranks; (iii) gold's timing performance is concentrated after 2022, consistent with our finding that all four of its predictive terms are insignificant while drift is high---those gains should be attributed to trend exposure, not timing skill; (iv) all regressions are full-sample; conclusions for the extension candidates (2000-tier) await rolling out-of-sample backtests.
+
+\end{document}
