@@ -91,7 +91,9 @@ def main():
         权重 = {}
         for f, g in 本季.groupby("因子"):
             黄 = g.sort_values("date")["黄牌"].iloc[0]
-            c = cos_ic(p表[f].loc[起:cutoff], 次日收益.loc[起:cutoff])
+            # iloc[:-1]:窗口末行(上季最后交易日)的"次日收益"=本季首日收益,
+            # 而权重本季首日开盘即生效——该观测在决策时点不可得,必须剔除(审计修复)
+            c = cos_ic(p表[f].loc[起:cutoff].iloc[:-1], 次日收益.loc[起:cutoff].iloc[:-1])
             if np.isfinite(c) and c > 0:
                 权重[f] = c * (0.5 if 黄 else 1.0)
         总 = sum(权重.values())

@@ -31,7 +31,7 @@ import sys
 import tempfile
 
 根 = os.path.dirname(os.path.abspath(__file__))
-定稿年化, 定稿夏普 = "28.2%", "1.38"
+定稿年化, 定稿夏普 = "27.8%", "1.37"
 错: list[str] = []
 
 
