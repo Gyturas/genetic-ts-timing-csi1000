@@ -8,9 +8,11 @@
 """
 from __future__ import annotations
 
+import http.client
 import json
 import os
-import subprocess
+import time
+import urllib.request
 
 import pandas as pd
 
@@ -24,16 +26,31 @@ ETF = {"etf_510300": "1.510300", "etf_510500": "1.510500", "etf_512100": "1.5121
 
 
 def _拉(secid: str, fqt: int) -> pd.DataFrame:
+    """用 urllib(内置,不依赖外部 curl)拉行情——双击 .command 时 PATH 为空,curl 不可用。"""
     url = (f"https://push2his.eastmoney.com/api/qt/stock/kline/get?secid={secid}"
            f"&fields1=f1&fields2=f51,f52,f53,f54,f55,f56,f57&klt=101&fqt={fqt}&beg=20250101&end=20500101")
-    out = subprocess.run(["curl", "-sm", "30", "-A", "Mozilla/5.0", url],
-                         capture_output=True, text=True).stdout
-    d = pd.DataFrame([x.split(",") for x in json.loads(out)["data"]["klines"]],
-                     columns=["date", "open", "close", "high", "low", "volume", "amount"])
-    d["date"] = pd.to_datetime(d["date"])
-    for c in ["open", "close", "high", "low", "volume", "amount"]:
-        d[c] = d[c].astype(float)
-    return d.set_index("date")
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0",
+                                               "Connection": "close"})
+    最后错 = None
+    for _ in range(3):                       # 东财偶发 IncompleteRead / 空返回,重试3次
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                out = r.read().decode("utf-8")
+            data = json.loads(out).get("data")
+            if data and data.get("klines"):
+                d = pd.DataFrame(
+                    [x.split(",") for x in data["klines"]],
+                    columns=["date", "open", "close", "high", "low", "volume", "amount"])
+                d["date"] = pd.to_datetime(d["date"])
+                for c in ["open", "close", "high", "low", "volume", "amount"]:
+                    d[c] = d[c].astype(float)
+                return d.set_index("date")
+            最后错 = "接口返回空"
+        except (http.client.IncompleteRead, urllib.error.URLError,
+                json.JSONDecodeError, TimeoutError) as e:
+            最后错 = type(e).__name__
+        time.sleep(1.5)
+    raise RuntimeError(f"拉取失败(secid={secid}): {最后错};可能非交易时段或网络受限")
 
 
 def _更新(tag: str, secid: str, 是指数: bool, 报告: list) -> None:
@@ -84,13 +101,15 @@ def _更新(tag: str, secid: str, 是指数: bool, 报告: list) -> None:
 
 def main() -> str:
     报告 = []
-    for t, s in 指数.items():
-        _更新(t, s, True, 报告)
-    for t, s in ETF.items():
-        _更新(t, s, False, 报告)
+    for t, s, 是指数 in ([(t, s, True) for t, s in 指数.items()]
+                       + [(t, s, False) for t, s in ETF.items()]):
+        try:
+            _更新(t, s, 是指数, 报告)
+        except Exception as e:                # 单标的失败不中断全局(信号可退回已有数据)
+            报告.append(f"{t}: ✗ {type(e).__name__}")
     末日 = pd.read_csv(os.path.join(paths.行情缓存, "idx_sh000852.csv"),
                      usecols=["date"])["date"].max()
-    print(f"行情更新完毕,末日 {末日}")
+    print(f"行情更新完毕,中证1000末日 {末日}")
     for r in 报告:
         print(" ", r)
     return 末日

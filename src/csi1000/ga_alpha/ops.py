@@ -40,7 +40,7 @@ def _ts_zscore(a: pd.DataFrame, w: int) -> pd.DataFrame:
     r = a.rolling(w)
     return _protected_div(a - r.mean(), r.std())
 
-
+        
 def _signed_sqrt(a: pd.DataFrame) -> pd.DataFrame:
     """保符号开方：sign(a)·sqrt(|a|)，与 slog 互补的量纲压缩。"""
     return np.sign(a) * np.sqrt(a.abs())

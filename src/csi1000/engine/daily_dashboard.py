@@ -100,10 +100,48 @@ def main():
         <div class=g><b>{指['卡玛']:.2f}</b><span>卡玛</span></div>
         <div class=g><b>{指['累计']*100:.0f}%</b><span>累计</span></div></div>"""
 
-    近8 = "".join(f"<tr><td>{d.date()}</td><td style='text-align:right'>{v*100:+.1f}%</td></tr>"
-                 for d, v in 仓.tail(8).items())
     方向 = "做多" if 明仓 > 0.02 else ("做空" if 明仓 < -0.02 else "空仓")
     色 = "#c0392b" if 明仓 > 0.02 else ("#27ae60" if 明仓 < -0.02 else "#7f8c8d")
+
+    # ---- 实盘跟踪:仓位确定性可复现,按模型执行时 模型仓位=实盘仓位 ----
+    # 时序:仓位 p[T](T日收盘算,T+1生效)→ 贡献到 结算收益 收[T+1]
+    r_etf = r.reindex(收.index)                         # 512100 当日收益
+    本周一 = (今 - pd.Timedelta(days=今.weekday())).normalize()
+
+    # (A) 本周实盘战绩:本周各交易日,策略实吃日收益 vs 持有
+    本周 = 收.loc[本周一:]
+    本周持 = r_etf.reindex(本周.index).fillna(0)
+    战绩行 = ""
+    策累, 持累 = 1.0, 1.0
+    for d in 本周.index:
+        策累 *= (1 + 收[d]); 持累 *= (1 + 本周持[d])
+        c = "#c0392b" if 收[d] >= 0 else "#27ae60"
+        战绩行 += (f"<tr><td>{d.date()}</td>"
+                 f"<td style='text-align:right;color:{c}'>{收[d]*100:+.2f}%</td>"
+                 f"<td style='text-align:right'>{本周持[d]*100:+.2f}%</td>"
+                 f"<td style='text-align:right;font-weight:600'>{(策累-1)*100:+.2f}%</td></tr>")
+    周策收 = (策累 - 1) * 100; 周持收 = (持累 - 1) * 100
+
+    # (B) 滚动明细:信号日仓位 → 次日ETF收益 + 次日策略收益(最新信号日次日未到,留空)
+    近信号 = 仓.tail(9)                                  # 含今天(最新信号,收益空)
+    滚动行 = ""
+    交易日 = list(收.index)
+    for T, posT in 近信号.items():
+        # posT 在 T 的下一交易日生效,吃那天的收益
+        次日 = 交易日[交易日.index(T) + 1] if T in 交易日 and 交易日.index(T) + 1 < len(交易日) else None
+        pc = "#c0392b" if posT > 0.02 else ("#27ae60" if posT < -0.02 else "#7f8c8d")
+        if 次日 is not None:
+            er, sr = float(r_etf.get(次日, np.nan)), float(收.get(次日, np.nan))
+            sc = "#c0392b" if sr >= 0 else "#27ae60"
+            右 = (f"<td style='text-align:right'>{次日.date()}</td>"
+                 f"<td style='text-align:right'>{er*100:+.2f}%</td>"
+                 f"<td style='text-align:right;color:{sc};font-weight:600'>{sr*100:+.2f}%</td>")
+        else:
+            右 = ("<td style='text-align:right;color:#bbb'>次日</td>"
+                 "<td style='text-align:right;color:#bbb'>—</td>"
+                 "<td style='text-align:right;color:#bbb'>待结算</td>")
+        滚动行 += (f"<tr><td>{T.date()}</td>"
+                 f"<td style='text-align:right;color:{pc};font-weight:600'>{posT*100:+.1f}%</td>{右}</tr>")
 
     html = f"""<!doctype html><html><head><meta charset=utf-8>
 <title>中证1000 每日面板</title><style>
@@ -123,7 +161,9 @@ img{{width:100%;border-radius:12px;background:#fff;box-shadow:0 1px 4px #0001;ma
 .row{{display:flex;gap:14px;flex-wrap:wrap}} .row>*{{flex:1;min-width:280px}}
 table{{width:100%;background:#fff;border-radius:12px;border-collapse:collapse;overflow:hidden;box-shadow:0 1px 4px #0001;font-size:14px}}
 td{{padding:7px 14px;border-bottom:1px solid #f0f0f0}}
+.lbl{{font-size:13px;font-weight:600;color:#555;margin-bottom:6px}}
 .note{{color:#aaa;font-size:12px;margin-top:16px;line-height:1.6}}
+.row{{margin-bottom:16px;align-items:flex-start}}
 </style></head><body>
 <h1>中证1000 时序择时 · 每日面板</h1>
 <div class=sub>v4 定稿(双40窗+同质参照系+cos加权+剔元老) · 信号日 {今.date()} · 生成 {dt.datetime.now():%Y-%m-%d %H:%M}</div>
@@ -137,11 +177,26 @@ td{{padding:7px 14px;border-bottom:1px solid #f0f0f0}}
 
 <div class=cards>{卡("策略 · 2018至今", 全, 色)}{卡(f"策略 · {今年}年内", 年内)}{卡("持有512100 · 2018至今", 持全, "#7f8c8d")}</div>
 
-<img src="{净值图}">
 <div class=row>
-  <img src="{仓位图}" style="margin:0">
-  <table><tr><td colspan=2 style="font-weight:600;color:#888;font-size:13px">近8日仓位</td></tr>{近8}</table>
+  <div style="flex:1.15">
+    <div class=lbl>本周实盘战绩(自 {本周一.date()} 周一起 · 按模型仓位每日实吃)</div>
+    <table>
+      <tr style="color:#888;font-size:12px"><td>日期</td><td style="text-align:right">策略当日</td><td style="text-align:right">持有当日</td><td style="text-align:right">本周累计</td></tr>
+      {战绩行}
+      <tr style="font-weight:700;background:#fafafa"><td>本周合计</td><td style="text-align:right;color:{'#c0392b' if 周策收>=0 else '#27ae60'}">{周策收:+.2f}%</td><td style="text-align:right">{周持收:+.2f}%</td><td style="text-align:right">超额 {周策收-周持收:+.2f}%</td></tr>
+    </table>
+  </div>
+  <div style="flex:1">
+    <div class=lbl>信号 → 次日收益(前一日仓位,次日吃到的收益)</div>
+    <table>
+      <tr style="color:#888;font-size:12px"><td>信号日</td><td style="text-align:right">仓位</td><td style="text-align:right">次日</td><td style="text-align:right">标的</td><td style="text-align:right">策略</td></tr>
+      {滚动行}
+    </table>
+  </div>
 </div>
+
+<img src="{净值图}">
+<img src="{仓位图}">
 
 <div class=note>
 口径:回测按信号日收盘成交,实盘为次日开盘(半天实施偏差约 −0.7pp);双边万5成本。
@@ -153,7 +208,8 @@ td{{padding:7px 14px;border-bottom:1px solid #f0f0f0}}
     open(out, "w", encoding="utf-8").write(html)
     print(f"\n★ 明日推荐仓位 {明仓*100:+.1f}%（{方向}）")
     print(f"★ 面板已生成: {out}")
-    os.system(f'open "{out}"')
+    if not os.environ.get("CSI1000_NO_OPEN"):   # 定时任务里不弹浏览器(launchd 设了该变量)
+        os.system(f'open "{out}"')
 
 
 if __name__ == "__main__":

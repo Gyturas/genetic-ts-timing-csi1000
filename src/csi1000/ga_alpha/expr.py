@@ -33,6 +33,7 @@ class Node:
 
     op: str                        # OPS 里的算子名，或 "field:<terminal>"
     children: tuple = ()           # 子节点元组；叶子为空 ()，一元算子长度 1，二元算子长度 2
+    # window的值可以是int或者None，默认值是None
     window: int | None = None      # 回看窗口（仅带窗口的时序算子有值），非窗口算子/叶子为 None
 
     @property

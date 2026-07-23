@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: csi1000
+Version: 4.0.0
+Summary: 中证1000 时序择时(v4 定稿):GA 因子挖矿 + walk-forward 回测
+Requires-Python: >=3.10
+Requires-Dist: numpy
+Requires-Dist: pandas
+Requires-Dist: scipy
+Requires-Dist: matplotlib
+Requires-Dist: scikit-learn
+Requires-Dist: arch
