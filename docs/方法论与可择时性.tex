@@ -1,0 +1,273 @@
+\documentclass[11pt,a4paper,fontset=mac]{ctexart}
+\usepackage{geometry}\geometry{margin=2.3cm}
+\usepackage{amsmath,amssymb,booktabs,threeparttable,setspace,enumitem}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue!55!black,citecolor=blue!55!black]{hyperref}
+\onehalfspacing
+\setlist{itemsep=2pt,topsep=3pt}
+
+\title{\textbf{中证1000 时序择时:可择时性的来源与遗传规划实现}}
+\author{}
+\date{2026 年 7 月}
+
+\begin{document}
+\maketitle
+\vspace{-2.2em}
+\begin{abstract}
+\noindent 本报告分两部分。\textbf{第一部分}回答一个前置问题:\emph{为什么是中证1000?}
+通过对黄金、沪深300、纳斯达克100、螺纹钢等资产的 AR(1)--GARCH(1,1) 回归,论证时序
+可择时性来自三者的合取——显著的短期动量、正的波动溢价、以及接近于零的漂移;并解释
+为何\emph{大漂移}与\emph{日频反转}型资产不适合多空择时。\textbf{第二部分}给出实现:公式化
+因子的遗传规划挖掘、rank IC 选择压力与 cos IC 加权的分工、无前视的滚动框架、
+对抗过拟合的制度、以及熊态增强。挖出的因子库自发地由波动族(约六成)与短动量族构成,
+与第一部分的回归诊断精确互证。定稿策略 2018--2026 回测年化约 27\%、夏普约 1.3,
+仅使用指数自身日频量价与多空操作。
+\end{abstract}
+
+% ==================================================================
+\part*{第一部分\quad 为什么中证1000 可择时}
+\addcontentsline{toc}{part}{第一部分:为什么可择时}
+
+\section{一个可证伪的判据}
+把一个资产能否被时序择时,归结为其日频对数收益 $r_t$ 的三项统计性质。估计
+\begin{equation}
+r_t=\mu+\varphi_1 r_{t-1}+\varphi_L\,\tilde m_{t-1}
+     +\varphi_2\,\tilde\sigma_{t-1}+\varphi_3\,(\tilde\sigma_{t-1}\!\cdot\! r_{t-1})+\varepsilon_t,
+\quad \varepsilon_t=\sigma_t e_t,\ \ \sigma_t^2=\omega+\alpha\varepsilon_{t-1}^2+\beta\sigma_{t-1}^2,
+\end{equation}
+其中 $\tilde\sigma_{t-1}$ 为标准化条件波动(状态变量),$\tilde m_{t-1}$ 为过去 244 日累计
+收益的标准化值(长期动量)。各系数的经济含义:$\varphi_1>0$ 为日频动量,$\varphi_2>0$ 为
+波动的正风险补偿(``恐慌后反弹''),$\varphi_3<0$ 为高波动下反转增强。据此提出\textbf{可择时判据}:
+\begin{quote}
+资产对日频动量族多空择时可择时,当且仅当\quad
+(T1)~$\varphi_1>0$ 且 $t>2$、$\mathrm{VR}(5)>1.05$;\quad
+(T2)~$\varphi_2>0$ 且 $t>1.5$;\quad
+(T3)~买入持有夏普 $|SR|<0.3$。
+\end{quote}
+
+\section{跨资产对比}
+表~\ref{tab:cross} 摘录代表性资产(全表 23 个,2010 起日频)。四类资产四种命运:
+
+\begin{table}[htbp]\centering
+\caption{代表性资产的三项判据(括号内为稳健 $t$ 值)}\label{tab:cross}
+\footnotesize\setlength{\tabcolsep}{4.5pt}\begin{threeparttable}
+\begin{tabular}{lcccccc}
+\toprule
+资产 & $\varphi_1$(短动量) & $\varphi_2$(bp) & VR(5) & 买持夏普 & 判据 & 实测 \\
+\midrule
+\textbf{中证1000} & $+0.055\,(2.7)$ & $+11.0\,(2.8)$ & $1.15$ & $0.20$ & \textbf{三关全过} & 爆炸 \\
+中证500          & $+0.038\,(2.0)$ & $+6.0\,(1.8)$  & $1.10$ & $0.13$ & 全过(弱一档)   & 中等 \\
+沪深300          & $+0.015\,(0.8)$ & $-1.4\,(-0.5)$ & $1.02$ & $0.07$ & T1/T2 双败      & 弱 \\
+黄金现货          & $+0.016\,(0.6)$ & $+2.1\,(0.5)$  & $0.93$ & $0.84$ & 四项皆不显著      & 一般(纯运气) \\
+纳斯达克100       & $-0.034\,(-1.6)$& $+5.4\,(1.6)$  & $0.83$ & $0.76$ & T1负+高漂移      & 一般 \\
+螺纹钢            & $-0.046\,(-2.5)$& $+2.2\,(0.8)$  & $0.94$ & $-0.10$& T1显著为负(反转) & 垃圾 \\
+铜               & $-0.044\,(-2.5)$& $+1.4\,(0.7)$  & $0.95$ & $0.18$ & T1负+$\varphi_3$负& 垃圾 \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}\scriptsize
+\item ``实测策略''为本项目遗传规划择时在该资产上的定性表现(华泰复现或 GA 实挖)。
+判据与实测排序完全一致;$\varphi_1$ 与实测绩效的 Spearman 秩相关达 $+0.77$($p=0.004$)。
+\end{tablenotes}\end{threeparttable}
+\end{table}
+
+\paragraph{(一)短期动量与波动溢价——中证1000 的两口肉。}
+中证1000 是全样本唯一\emph{同时}满足 $\varphi_1$、$\varphi_2$ 双显著的资产。$\varphi_1=+0.055$
+意味着昨日每涨 1\%、今日期望多涨 5.5bp;$\varphi_2=+11$bp/日意味着波动每高一个标准差、
+次日期望收益 $+11$bp。经济机制上,前者来自小盘散户主导下的\emph{涨跌延续与龙头—跟风的
+lead--lag 传导},后者来自\emph{恐慌性抛售后的快速均值回归反弹}——两者都是小盘、散户化、
+高换手市场的结构性特征。A股宽基呈清晰梯度:中证1000 $>$ 中证500 $>$ 沪深300,与市值
+反向、与散户占比同向。
+
+\paragraph{(二)小漂移——多空操作的沃土。}
+中证1000 买入持有夏普仅 $0.20$(年化漂移接近零)。对多空择时这是理想土壤:\emph{空头腿
+不必对抗一条上行的趋势线},择时赚到的每一分都是真 alpha 而非趋势暴露。这也解释了为何
+判据要含 T3。
+
+\paragraph{(三)为什么大漂移不好——黄金与纳斯达克。}
+黄金四项系数\emph{全部不显著}(最大 $|t|<1$),唯一突出的是买持夏普 $0.84$——它只有漂移、
+没有可择时结构。华泰框架在黄金上 2022 年后的收益,是搭了单边牛市的便车,属\emph{趋势
+暴露而非择时技能}(``黄金纯运气'')。纳斯达克同理:$\varphi_1$ 为负、买持夏普 $0.76$。
+大漂移资产的问题有二:其一,择时要先跑赢``躺着不动'',门槛极高;其二,多空的空头腿
+持续与漂移作对,长期是负 carry。\textbf{结论:漂移越大,择时相对买入持有的边际越小。}
+
+\paragraph{(四)为什么反转不好——螺纹钢与铜。}
+商品的 $\varphi_1$ \emph{显著为负}(螺纹 $-0.046$,$t=-2.5$;铜 $-0.044$),即日频反转。
+反转当然是一种结构,但对本框架有三重致命伤:
+\begin{enumerate}
+\item \textbf{成本}:反转信号自相关为负,\emph{仓位每日翻脸},换手 70--100\%/日;而反转
+毛信号仅 4--6bp/日,\emph{低于双边万五的换手成本}——毛信号还没成本大。
+\item \textbf{尺度}:$\mathrm{VR}(5)<1$ 说明反转只活在隔日尺度,持有 5 日即自我抵消;而
+本框架的两层 40 日 rank 映射天然是周级持有,尺度不匹配。
+\item \textbf{单引擎}:$\varphi_2$ 不显著,反转是唯一口粮,且是最难消化的一种。
+\end{enumerate}
+我们在\emph{干净的收益率连续合约}(零换月假跳)上用 GA 全火力实挖螺纹钢与铜为证:
+样本内每季录取 8--11 个因子,但 walk-forward 净成绩\textbf{铜 $-6.8\%$/夏普 $-0.60$}——
+样本内挖得风生水起、样本外直接亏钱,正是``有结构 $\ne$ 可择时''的活教材。
+
+\paragraph{(五)一个反直觉的旁证:波动\emph{可预测} $\ne$ 可择时。}
+贵州茅台与纳斯达克的波动最可预测(Mincer--Zarnowitz $R^2\approx0.27$--$0.32$),方向却
+最不可测。GARCH 持续性、MZ $R^2$ 与实测绩效的秩相关均不显著。\emph{能预测波动的大小,
+不代表能预测涨跌的方向}——这也是为什么 T1/T2 量的是收益的自相关与风险补偿,而非波动本身。
+
+% ==================================================================
+\part*{第二部分\quad 方法:遗传规划择时的实现}
+\addcontentsline{toc}{part}{第二部分:方法实现}
+
+\section{因子:一个只用历史的函数}
+一个\emph{因子}是函数 $f$,仅用第 $t$ 日及之前的开高低收量额,算出一个打分
+$F_{t,i}=f(\cdot)$。理想的 $f$ 使 $F_{t,i}$ 与次日收益 $r_{t+1,i}$ 稳定相关。挖因子即在
+公式空间 $\mathcal F$ 上求 $\max_{f}\mathrm{IC}(f)$。$\mathcal F$ 大到无法穷举(公式可任意
+嵌套),故用\textbf{遗传规划}(Koza, 1992)做定向随机搜索。
+
+\subsection{算子与元素}
+因子写成\emph{表达式树}:叶子是行情变量,内节点是算子。零件库:
+\begin{itemize}
+\item \textbf{叶子}(9):\texttt{open, high, low, close, volume, amount, returns, entropy120, beta120}。
+\item \textbf{算子}(26):四则运算(除法防零)、\texttt{neg/abs/sign/ssqrt/slog};滚动统计
+\texttt{ts\_mean/ts\_std/ts\_min/ts\_max/ts\_sum/ts\_rank/ts\_zscore};
+\texttt{delay/delta/ema/ts\_corr/ts\_slope/ts\_argmax/ts\_argmin/ts\_decay\_linear/ts\_er/ts\_tsi}。
+\item \textbf{窗口}:$\{3,5,10,20,40,60,120,244\}$。
+\end{itemize}
+所有算子\textbf{只许回看},故任何一棵树天然不含未来信息。子树可互换(交叉)、可随机
+改动(变异),产物仍是合法公式——这正是``繁殖''所需的性质。
+
+\section{两把尺子:rank IC 挖、cos IC 打分}
+\subsection{挖掘用 rank IC——抗噪的选择压力}
+GA 每轮评估 $200\times20=4000$ 个公式,选择压力用 \textbf{rank IC}(信号与次日收益的
+Spearman 秩相关)。理由是\emph{抗噪}:秩统计对极端日免疫,每一天等票,不会被单日大行情
+骗——否则 GP 会专门进化出``赌极端日''的过拟合树。
+
+\subsection{加权用 cos IC——对齐盈亏}
+入库后的因子如何配权?先把每个因子的信号 $S_i$ 过一遍生产同款仓位映射
+\begin{equation}
+p_{i,t}=\tanh\!\big(\Phi^{-1}(\mathrm{ts\_percentile}(S_{i,t},40))\big),\qquad
+\mathrm{cosIC}_i=\frac{\sum_t p_{i,t}\,r_{t+1}}{\sqrt{\sum_t p_{i,t}^2\cdot\sum_t r_{t+1}^2}} ,
+\end{equation}
+再按 $\max(\mathrm{cosIC}_i,0)$ 加权。分子 $\sum p\,r$ \emph{就是该因子单独交易的盈亏},
+故 cos IC 直接对齐目标函数;而 rank IC 只看排序、丢掉信号强度。控制实验:同一因子库,
+rank 加权 $\to$ cos 加权,夏普由约 $1.0$ 升至约 $1.2$。
+
+\paragraph{为什么两把尺子而非一把。}挖掘要\emph{抗噪的方向筛选}(rank),加权要\emph{对齐
+盈亏的计量}(cos);两者信息互补。同一把尺子用两遍:cos 挖 + cos 权会过拟合(实测夏普
+仅 $0.84$),rank 挖 + rank 权则在加权端丢信息。定稿采用``rank 挖 + cos 权''。
+
+\section{滚动框架:无前视}
+\begin{itemize}
+\item \textbf{三段数据}:挖掘只见 train(前 8 年);入库须在 validation(近 2 年)复核达标
+且方向一致;成绩只在完全未参与的时段计算。
+\item \textbf{Walk-forward}:每季度只用``当时可见''的数据重挖重选,2013 起预热、2015 起
+建库、2018 起计成绩——净值上\emph{每一天都是模型没见过的}。
+\item \textbf{两层信号变换}:因子值 $\to$ 40 日 rank(消因子间量纲)$\to$ cos 加权合成
+$\to$ 组合信号 40 日 rank(消时间上的分布漂移)$\to$ $\tanh(\Phi^{-1}(\cdot))$ 映射到
+$[-1,1]$ 仓位。所有 rolling 窗口只回看。
+\end{itemize}
+
+\section{对抗过拟合:制度重于算法}
+GP 的原罪:``4000 个随机数取最大''必然挑出漂亮的训练 IC(多重检验),
+$\mathbb E[\max_j X_j]\uparrow$ 随 $n$ 增长,即使每个 $X_j$ 都是噪声。故防线写成制度:
+\begin{itemize}
+\item \textbf{入库三关}:validation 月度 IC $\ge0.015$、对现役库回归的\emph{残差} IC
+$\ge0.01$(防同信息换马甲重复入库)、相关筛 $\le0.9$。
+\item \textbf{逐季体检}:trailing 12 月 IC 转负吃黄牌,连续两季退役;权重 $=\max(\text{trailing IC},0)$,
+失效因子话语权自动归零。
+\item \textbf{预注册}:所有阈值跑前写死、跑后不改;改规则即声明本轮作废、另起一轮。
+\item \textbf{诚实校验}:任何``从存档重放''必须先逐日复现引擎原值(差 $<10^{-12}$)才采信;
+每步升级用分段(2018--21 vs 2022--26)一致性检验排除单时段过拟合。
+\end{itemize}
+一句话:\emph{遗传算法高效地提出猜想,制度残忍地杀死假猜想;后者比前者重要}。
+
+\section{熊态增强}
+在基础量价信号之上叠加一个状态层修正 $\Delta S$:用期权隐含波动(iVIX)、利率(shibor)等
+构造\emph{熊市概率} $p_{\text{bear}}$,熊态时\emph{压低反转/波动族、抬升动量族}的权重
+(家族再倾斜),得到 $\Delta S$ 加到组合信号上。它贡献约 $+0.8$pp 年化,是锦上添花而非主菜;
+非熊态时 $\Delta S=0$。
+
+\section{挖出了什么:回归诊断的镜像}
+关键验证——GA 在\emph{不知道}第一部分回归结论的前提下,自发挖出的因子库,其构成精确
+复刻了回归诊断。按信号与回归特征的实际相关归类中证1000 在役因子:
+\textbf{波动族约 60\%、短动量族约 20\%、交互族 0 个}——恰好对应 $\varphi_2$ 最肥、$\varphi_1$
+有肉但只在短窗、$\varphi_3$ 不显著(市场无此结构、进化正确地未产生)。cos IC 前 20 名
+全部为波动族。表~\ref{tab:factors} 列出代表性因子。
+
+\begin{table}[htbp]\centering
+\caption{cos IC 靠前的代表性在役因子(中证1000)}\label{tab:factors}
+\small\begin{threeparttable}
+\begin{tabular}{clcl}
+\toprule
+族 & 表达式 & cos IC & 白话 \\
+\midrule
+波动 & \texttt{ts\_std(ts\_sum(abs(returns),3),5)} & $+0.23$ & 3日累计振幅的5日波动 \\
+波动 & \texttt{ts\_std(abs(returns),10)}          & $+0.15$ & 10日已实现波动率(最经典) \\
+波动 & \texttt{ts\_std(close,5)}                   & $+0.11$ & 收盘价不稳定度 \\
+流动性& \texttt{ts\_std(slog(amount),5)}           & $+0.13$ & 成交额(对数)的波动 \\
+流动性& \texttt{ts\_std(div(amount,open),5)}       & $+0.12$ & 换手强度的波动 \\
+短动量& \texttt{ts\_max(ssqrt(returns),3)}         & $+0.10$ & 近3日最大单日涨幅 \\
+趋势 & \texttt{ts\_std(ema(ts\_er(returns,20),244),20)} & $+0.17$ & 趋势效率(纯度)的波动 \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}\scriptsize
+\item 方向均为 sign$=+1$(波动放大 $\to$ 做多),与中证1000 ``高波动次日反弹''的实测
+(高波动日次日 $+0.25\%$、低波动日 $-0.15\%$)一致。
+\end{tablenotes}\end{threeparttable}
+\end{table}
+
+% ==================================================================
+\appendix
+\part*{附录\quad 回测结果}
+\addcontentsline{toc}{part}{附录:结果}
+
+\section{定稿策略绩效}
+定稿配置:26 算子 GA 库 $+$ 双 40 日窗 $+$ 同质参照系 $+$ cos IC 加权 $+$ 剔除人工元老
+$+$ 熊态增强。执行标的 512100 ETF,双边万五,信号 $T$ 日收盘、$T{+}1$ 生效。
+
+\begin{table}[htbp]\centering
+\caption{2018--2026 回测(截至 2026-07)}\label{tab:perf}
+\small\begin{tabular}{lccccc}
+\toprule
+口径 & 年化 & 夏普 & 最大回撤 & 卡玛 & 均$|$仓$|$ \\
+\midrule
+熊增强 · 多空(定稿) & $\mathbf{26.8\%}$ & $\mathbf{1.31}$ & $-17.8\%$ & $1.51$ & $60.2\%$ \\
+熊增强 · 纯多(禁空) & $16.7\%$ & $1.04$ & $-18.2\%$ & $0.92$ & $30.0\%$ \\
+仅量价 · 多空       & $26.3\%$ & $1.29$ & $-17.9\%$ & $1.47$ & $60.3\%$ \\
+持有 512100        & $3.2\%$  & $0.15$ & $-46.3\%$ & $0.07$ & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent 定稿日(2026-07-21)口径为 $27.8\%/1.31$;上表随实盘数据前进略有波动。
+
+\section{持仓层的分步增益(同一因子库)}
+\begin{table}[htbp]\centering
+\small\begin{tabular}{lcccc}
+\toprule
+配置 & 年化 & 夏普 & 卡玛 \\
+\midrule
+rank120 $+$ rank IC 加权 $+$ 含元老(线上初版) & $20.7\%$ & $1.01$ & $0.99$ \\
+\ \ $+$ cos IC 加权                          & $24.7\%$ & $1.20$ & $1.32$ \\
+\ \ $+$ 剔除元老                             & $25.4\%$ & $1.24$ & $1.37$ \\
+\ \ $+$ 双 40 窗 $+$ 同质参照系(定稿)        & $\mathbf{27.8\%}$ & $\mathbf{1.37}$ & $\mathbf{1.56}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{局限与诚实声明}
+\begin{itemize}
+\item \textbf{选择偏差}:cos 加权、剔元老、rank40、同质参照系四步均在 2018--2026 同一段
+数据上择优,无法用同段数据自证清白;保守的未来预期应打折,\emph{预期夏普 1.0--1.2}。
+\item \textbf{执行偏差}:回测按信号日收盘成交,实盘为次日开盘,半天实施偏差约 $-0.7$pp。
+\item \textbf{成本敏感}:万五$\to$万十损约 5pp;小资金(实际佣金万 0.5--1)偏保守,大资金
+需另做容量测算。
+\item \textbf{推广待验}:判据在样本外指向中证2000(各项不弱于中证1000),但 2000 系无
+股指期货,空头腿须纯多或以 IM 代理对冲;滚动样本外回测尚未完成。
+\end{itemize}
+
+\section*{参考文献(择要)}
+\small
+Koza (1992) \emph{Genetic Programming}, MIT Press. \quad
+Kakushadze (2016) 101 Formulaic Alphas, \emph{Wilmott}. \quad
+Neely, Rapach, Tu \& Zhou (2014) Forecasting the Equity Risk Premium, \emph{Manag.\ Sci.} \quad
+Lo \& MacKinlay (1990) \emph{RFS}. \quad
+Welch \& Goyal (2008); Goyal, Welch \& Zafirov (2024) \emph{RFS}. \quad
+Moreira \& Muir (2017); Cederburg et al.\ (2020).
+
+\end{document}
