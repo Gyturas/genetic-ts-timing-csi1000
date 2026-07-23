@@ -73,7 +73,18 @@
 
 **时间轴**:2013-01 起元老预热记账 → **2015-01 起建库**(每季度 walk-forward 重挖重选)→ **2018-01-01 起计成绩**(年化 244 交易日)。净值每一天都是模型未见过的数据。
 
-**指标时间序列:有,全程落盘。** 每因子逐日信号+逐季权重+黄牌状态(`results/ops26/因子逐日信号.csv.gz`,91 万行)、组合信号 comb 与映射分位 π(`data/archive/分资产逐日.csv`、`映射分位.csv`)、逐日仓位与收益(`results/final/逐日.csv`)、因子名册与生涯事件(`data/archive/名册.csv`、`事件.csv`)。
+**历史滚动因子库(walk-forward 全存档)在 `results/ops26/`**——这是逐季重挖沉淀下来的完整因子生命史,不是某个时点的快照:
+
+| 文件 | 内容 |
+|---|---|
+| `state.pkl` | 引擎滚动状态:**55 季(2013Q1–2026Q3)、累计 1245 个入库因子**(含已退役)、每因子表达式树/方向/入库季/黄牌/退役/复职记录、逐月 IC 记账;续跑与实盘延算的唯一真源 |
+| `因子逐日信号.csv.gz` | 每因子 × 每指数 × 每日的信号值与当季权重,**91 万行**;换加权方案/复现无需重挖 |
+| `名册.csv` | 全 1245 因子清单(表达式、kind、方向、专属库、入库季、在役/退役状态) |
+| `事件.csv` | **2911 条**生涯事件(入库 / 黄牌 / 退役 / 立即退役 / 复职),可还原任意季度的在役名单 |
+| `分资产逐日.csv`·`资产暴露.csv`·`组合逐日.csv` | 挖矿当场算的逐日信号/仓位/净值 |
+| `argarch/` | 元老 AR-GARCH 记录器缓存 |
+
+**指标时间序列全程落盘**:组合信号 comb 与映射分位 π 在 `data/archive/{分资产逐日,映射分位}.csv`;逐日仓位与收益在 `results/final/逐日.csv`。
 
 ### 3. 信号组合
 
@@ -115,8 +126,10 @@ src/csi1000/ga_alpha/     GP引擎:expr(表达式树) ops(算子) evolve(进化+
 src/csi1000/walkforward/  滚动框架:config data elders engine metrics
 src/csi1000/paths.py      全仓唯一路径出口
 data/cache/               挖矿行情      data/archive/    信号与因子库存档
-results/ops26/            26算子挖矿定稿存档(state.pkl + 因子逐日信号.csv.gz)
-results/final/            成绩表/逐日/图    docs/    技术报告 PDF
+results/ops26/            ★历史滚动因子库★ 55季全存档(state.pkl / 因子逐日信号.csv.gz / 名册 / 事件)
+results/final/            成绩表/逐日/图
+docs/                     方法论与可择时性.pdf(技术报告)· 说明_v4.md
+docs/research_timeability/  跨资产 AR-GARCH 可择时性研究(中英双语 PDF + 复现脚本)
 ```
 
 ## 快速开始
@@ -135,4 +148,6 @@ python -m csi1000.engine.mine_ops26        # 从零重挖因子库(约1小时,26
 
 git tag 管理:`v4.0.0` 为当前定稿;历史 v1/v2/v3 文件夹归档于 tag `legacy-folders-v1v2v3`(`git checkout legacy-folders-v1v2v3 -- v3/` 取回)。演进:v1 rank120+rank加权+含元老 20.7%/1.01 → +cos加权 24.7%/1.20 → v3 +剔元老 25.4%/1.24 → **v4 +双40窗+同质参照系 27.8%/1.37**(定稿日 2026-07-21 口径,随实盘数据前进小幅波动)。
 
-深入阅读:[docs/方法论与可择时性.pdf](docs/方法论与可择时性.pdf)(第一部分:为什么中证1000可择时——跨资产 AR-GARCH 对比;第二部分:方法完整推导)。
+深入阅读:
+- [docs/方法论与可择时性.pdf](docs/方法论与可择时性.pdf) —— 完整技术报告(第一部分:为什么中证1000可择时,跨资产对比;第二部分:方法推导)
+- [docs/research_timeability/](docs/research_timeability/) —— 跨资产 AR-GARCH 可择时性研究(中文 `报告.pdf` / 英文 `report_en.pdf`,含 23 资产回归复现脚本)
