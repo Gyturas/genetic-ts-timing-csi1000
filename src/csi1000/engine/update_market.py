@@ -23,20 +23,85 @@ from csi1000 import paths
 ETF = {"etf_510300": "1.510300", "etf_510500": "1.510500", "etf_512100": "1.512100",
        "etf_159915": "0.159915", "etf_588000": "1.588000", "etf_510880": "1.510880",
        "etf_511880": "1.511880"}
+# 东财 secid → cjpy Wind 代码(cjpy 为首选数据源:天软官方、有 token、不被封)
+_WIND = {"1.000300": "000300.SH", "1.000905": "000905.SH", "1.000852": "000852.SH",
+         "0.399006": "399006.SZ", "1.000688": "000688.SH", "1.000922": "000922.SH",
+         "1.510300": "510300.SH", "1.510500": "510500.SH", "1.512100": "512100.SH",
+         "0.159915": "159915.SZ", "1.588000": "588000.SH", "1.510880": "510880.SH",
+         "1.511880": "511880.SH"}
+
+
+# 东财对"裸 urllib"请求会 RemoteDisconnected,但接受带完整浏览器头的请求,也接受 curl。
+# 策略:先 urllib(带浏览器全套头,不依赖外部命令),失败再回退 curl(系统有则用)。
+_浏览器头 = {
+    "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "zh-CN,zh;q=0.9",
+    "Referer": "https://quote.eastmoney.com/",
+}
+
+
+def _取json(url: str) -> dict | None:
+    # 途径1:urllib + 浏览器头
+    try:
+        req = urllib.request.Request(url, headers=_浏览器头)
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except (http.client.IncompleteRead, urllib.error.URLError,
+            json.JSONDecodeError, TimeoutError, ConnectionError):
+        pass
+    # 途径2:回退 curl(双击环境可能无 curl,故补全 PATH 再找)
+    import shutil
+    curl = shutil.which("curl", path="/usr/bin:/bin:/usr/local/bin:" + os.environ.get("PATH", ""))
+    if curl:
+        try:
+            import subprocess
+            out = subprocess.run([curl, "-sm", "30", "-A", _浏览器头["User-Agent"],
+                                  "-e", _浏览器头["Referer"], url],
+                                 capture_output=True, text=True, timeout=35).stdout
+            return json.loads(out)
+        except Exception:
+            pass
+    return None
+
+
+def _拉_cjpy(secid: str, fqt: int) -> pd.DataFrame | None:
+    """首选:cjpy(天软官方源)。fqt 0=不复权(指数) / 1=前复权(ETF),已验证收益率与东财一致。"""
+    wind = _WIND.get(secid)
+    if wind is None:
+        return None
+    try:
+        import cjpy
+        import datetime as _dt
+        起 = (_dt.date.today() - _dt.timedelta(days=15)).strftime("%Y-%m-%d")  # 拉近15天,增量拼接够用
+        d = cjpy.get_market_data(code=wind, start=起, end="2050-01-01",
+                                 cycle="day", rate="前复权" if fqt == 1 else "不复权")
+        d = pd.DataFrame({
+            "date": pd.to_datetime(d["时间"]),
+            "open": d["open"].astype(float), "high": d["high"].astype(float),
+            "low": d["low"].astype(float), "close": d["close"].astype(float),
+            "volume": d["vol"].astype(float), "amount": d["amount"].astype(float),
+        }).set_index("date")
+        return d if len(d) else None
+    except Exception:
+        return None
 
 
 def _拉(secid: str, fqt: int) -> pd.DataFrame:
-    """用 urllib(内置,不依赖外部 curl)拉行情——双击 .command 时 PATH 为空,curl 不可用。"""
+    d = _拉_cjpy(secid, fqt)
+    if d is not None:
+        return d
+    # 回退:东财公开接口(cjpy 不可用/无 token 时兜底)
     url = (f"https://push2his.eastmoney.com/api/qt/stock/kline/get?secid={secid}"
            f"&fields1=f1&fields2=f51,f52,f53,f54,f55,f56,f57&klt=101&fqt={fqt}&beg=20250101&end=20500101")
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0",
-                                               "Connection": "close"})
     最后错 = None
-    for _ in range(3):                       # 东财偶发 IncompleteRead / 空返回,重试3次
-        try:
-            with urllib.request.urlopen(req, timeout=30) as r:
-                out = r.read().decode("utf-8")
-            data = json.loads(out).get("data")
+    for _ in range(3):
+        j = _取json(url)
+        if j is None:
+            最后错 = "连接被拒/无 curl"
+        else:
+            data = j.get("data")
             if data and data.get("klines"):
                 d = pd.DataFrame(
                     [x.split(",") for x in data["klines"]],
@@ -46,9 +111,6 @@ def _拉(secid: str, fqt: int) -> pd.DataFrame:
                     d[c] = d[c].astype(float)
                 return d.set_index("date")
             最后错 = "接口返回空"
-        except (http.client.IncompleteRead, urllib.error.URLError,
-                json.JSONDecodeError, TimeoutError) as e:
-            最后错 = type(e).__name__
         time.sleep(1.5)
     raise RuntimeError(f"拉取失败(secid={secid}): {最后错};可能非交易时段或网络受限")
 
