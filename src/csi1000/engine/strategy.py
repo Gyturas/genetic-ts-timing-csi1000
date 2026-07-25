@@ -7,8 +7,9 @@
   仓位     = tanh(Φ⁻¹(信号的40日滚动分位))                可做空,均|仓|约61%
              (v1.1:由clip改tanh——极端区保留分辨率,84分位不再一刀切满仓)
              (v1.2:映射窗120→40——空头腿夏普在40~50日见顶,中证500独立复现)
-  结算     = 货基 + 仓位_{t-1}×(512100收益 − 货基) − 万5×|Δ仓位|
-成绩(2018~2026):年化20.7% 夏普1.01 回撤−20.9% 卡玛0.99 vs 持有 4.1%/0.19/−46.3%
+  结算     = 货基 + 仓位×(512100开盘收益 − 货基) − 万5×|Δ仓位|
+             (v1.3:执行口径改"次日开盘"——信号收盘价产生,次日开盘成交,吃open→open,
+              仓位滞后2格生效;与实盘节奏一致。尾盘close口径留作对比,见 结算(执行=)。)
 用法: from csi1000.engine.strategy import 建仓位, 结算, 统计   或直接 python -m 引擎.策略
 """
 from __future__ import annotations
@@ -31,9 +32,9 @@ ETF, 指数列 = "512100", "zz1000"
 映射窗, 成本, 口径起 = 40, 0.0005, "2018-01-01"   # v1.2:映射窗由120改40
 
 
-def 读价(tag: str) -> pd.Series:
+def 读价(tag: str, 列: str = "close") -> pd.Series:
     return pd.read_csv(os.path.join(缓存, tag + ".csv"), parse_dates=["date"]) \
-        .set_index("date")["close"]
+        .set_index("date")[列]
 
 
 def 建信号(含熊增强: bool = True) -> pd.Series:
@@ -64,11 +65,16 @@ def 建仓位(S: pd.Series, 标的收益: pd.Series | None = None,
     return p.fillna(0.0)
 
 
-def 结算(p: pd.Series, r: pd.Series, rf: pd.Series) -> pd.Series:
-    """日结算:仓位T-1生效,闲钱吃货基,双边万5。"""
+def 结算(p: pd.Series, r: pd.Series, rf: pd.Series, 执行: str = "close") -> pd.Series:
+    """日结算:闲钱吃货基,双边万5。执行口径两选:
+      close(尾盘):信号(收盘算)当日尾盘成交,吃 close→close。仓位T-1生效(滞后1)。
+      open(次日开盘):信号(收盘算)次日开盘成交,吃 open→open。仓位T-2生效(滞后2)——
+        因 T 收盘的信号最早只能 T+1 开盘建仓,持到 T+2 开盘,故比尾盘口径再迟一格。
+    r 须与口径匹配(close口径传 close收益,open口径传 open收益)。"""
+    滞 = 2 if 执行 == "open" else 1
     rfi = rf.reindex(p.index).fillna(0)
-    return (rfi + p.shift(1).fillna(0) * (r.reindex(p.index).fillna(0) - rfi)
-            - p.diff().abs().fillna(0) * 成本)
+    return (rfi + p.shift(滞).fillna(0) * (r.reindex(p.index).fillna(0) - rfi)
+            - p.diff().abs().shift(滞 - 1).fillna(0) * 成本)   # 成本在成交日计,故随滞后平移
 
 
 def 统计(r: pd.Series, rf: pd.Series, 仓: pd.Series | None = None, 起=口径起) -> dict:
@@ -94,10 +100,13 @@ def 读映射分位(含熊增强: bool) -> pd.Series | None:
     return d["π_增强" if 含熊增强 else "π_量价"]
 
 
-def 跑一遍(含熊增强: bool = True, 禁空: bool = False):
-    """返回 (逐日收益, 仓位, 标的收益, 货基)。"""
+def 跑一遍(含熊增强: bool = True, 禁空: bool = False, 执行: str = "open"):
+    """返回 (逐日收益, 仓位, 标的收益, 货基)。
+    执行口径(v1.3 定稿):open=次日开盘成交(默认,与实盘一致);close=尾盘成交(旧口径,留作对比)。
+    无论哪种,信号一律用收盘价产生——只是成交/结算价不同。"""
     S = 建信号(含熊增强)
-    r = 读价(f"etf_{ETF}").pct_change().reindex(S.index)
+    价列 = "open" if 执行 == "open" else "close"
+    r = 读价(f"etf_{ETF}", 价列).pct_change().reindex(S.index)
     rf = 读价("etf_511880").pct_change().clip(lower=0).reindex(S.index).fillna(0)
     π = 读映射分位(含熊增强)
     if π is not None:
@@ -108,7 +117,7 @@ def 跑一遍(含熊增强: bool = True, 禁空: bool = False):
         p = p.where(r.notna(), 0.0).fillna(0.0)
     else:
         p = 建仓位(S, r, 禁空=禁空)
-    return 结算(p, r, rf), p, r, rf
+    return 结算(p, r, rf, 执行), p, r, rf
 
 
 if __name__ == "__main__":

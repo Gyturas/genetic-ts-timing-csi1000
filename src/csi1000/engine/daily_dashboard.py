@@ -104,8 +104,8 @@ def main():
     色 = "#c0392b" if 明仓 > 0.02 else ("#27ae60" if 明仓 < -0.02 else "#7f8c8d")
 
     # ---- 实盘跟踪:仓位确定性可复现,按模型执行时 模型仓位=实盘仓位 ----
-    # 时序:仓位 p[T](T日收盘算,T+1生效)→ 贡献到 结算收益 收[T+1]
-    r_etf = r.reindex(收.index)                         # 512100 当日收益
+    # 时序(开盘口径):仓位 p[T](T日收盘算)→ T+1开盘建仓 → T+2开盘结算 → 贡献到 收[T+2]
+    r_etf = r.reindex(收.index)                         # 512100 开盘→开盘日收益(与结算口径一致)
     本周一 = (今 - pd.Timedelta(days=今.weekday())).normalize()
 
     # (A) 本周实盘战绩:本周各交易日,策略实吃日收益 vs 持有
@@ -122,22 +122,22 @@ def main():
                  f"<td style='text-align:right;font-weight:600'>{(策累-1)*100:+.2f}%</td></tr>")
     周策收 = (策累 - 1) * 100; 周持收 = (持累 - 1) * 100
 
-    # (B) 滚动明细:信号日仓位 → 次日ETF收益 + 次日策略收益(最新信号日次日未到,留空)
-    近信号 = 仓.tail(9)                                  # 含今天(最新信号,收益空)
+    # (B) 滚动明细:信号日T收盘出仓 → T+1开盘建仓 → T+2开盘结算,posT 吃到 收[T+2]
+    近信号 = 仓.tail(9)                                  # 含最新2日(仓位已定、收益待结算)
     滚动行 = ""
     交易日 = list(收.index)
     for T, posT in 近信号.items():
-        # posT 在 T 的下一交易日生效,吃那天的收益
-        次日 = 交易日[交易日.index(T) + 1] if T in 交易日 and 交易日.index(T) + 1 < len(交易日) else None
+        i = 交易日.index(T) if T in 交易日 else -1
+        结算日 = 交易日[i + 2] if i >= 0 and i + 2 < len(交易日) else None   # 开盘口径滞后2格
         pc = "#c0392b" if posT > 0.02 else ("#27ae60" if posT < -0.02 else "#7f8c8d")
-        if 次日 is not None:
-            er, sr = float(r_etf.get(次日, np.nan)), float(收.get(次日, np.nan))
+        if 结算日 is not None:
+            er, sr = float(r_etf.get(结算日, np.nan)), float(收.get(结算日, np.nan))
             sc = "#c0392b" if sr >= 0 else "#27ae60"
-            右 = (f"<td style='text-align:right'>{次日.date()}</td>"
+            右 = (f"<td style='text-align:right'>{结算日.date()}</td>"
                  f"<td style='text-align:right'>{er*100:+.2f}%</td>"
                  f"<td style='text-align:right;color:{sc};font-weight:600'>{sr*100:+.2f}%</td>")
         else:
-            右 = ("<td style='text-align:right;color:#bbb'>次日</td>"
+            右 = ("<td style='text-align:right;color:#bbb'>—</td>"
                  "<td style='text-align:right;color:#bbb'>—</td>"
                  "<td style='text-align:right;color:#bbb'>待结算</td>")
         滚动行 += (f"<tr><td>{T.date()}</td>"
@@ -187,9 +187,9 @@ td{{padding:7px 14px;border-bottom:1px solid #f0f0f0}}
     </table>
   </div>
   <div style="flex:1">
-    <div class=lbl>信号 → 次日收益(前一日仓位,次日吃到的收益)</div>
+    <div class=lbl>信号 → 结算收益(收盘出仓 · 次日开盘建仓 · 隔日开盘结算)</div>
     <table>
-      <tr style="color:#888;font-size:12px"><td>信号日</td><td style="text-align:right">仓位</td><td style="text-align:right">次日</td><td style="text-align:right">标的</td><td style="text-align:right">策略</td></tr>
+      <tr style="color:#888;font-size:12px"><td>信号日</td><td style="text-align:right">仓位</td><td style="text-align:right">结算日</td><td style="text-align:right">标的</td><td style="text-align:right">策略</td></tr>
       {滚动行}
     </table>
   </div>
@@ -199,7 +199,7 @@ td{{padding:7px 14px;border-bottom:1px solid #f0f0f0}}
 <img src="{仓位图}">
 
 <div class=note>
-口径:回测按信号日收盘成交,实盘为次日开盘(半天实施偏差约 −0.7pp);双边万5成本。
+口径(v1.3):信号按当日收盘价产生,次日开盘成交、隔日开盘结算(open→open),回测与实盘同口径;双边万5成本。
 选择偏差已知,保守预期夏普 1.0~1.2(见 v4 审计记录)。此面板为策略输出,非投资建议,自行决策与执行。
 </div>
 </body></html>"""
