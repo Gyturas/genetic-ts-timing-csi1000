@@ -13,12 +13,12 @@ for h in 1 2 3 4 5 6 7; do
     continue
   fi
   echo "启动 h=$h(日志 results/mine_open/logs/h$h.log)"
-  PYTHONPATH=src nohup python3 -m csi1000.engine.mine_open_horizons --h $h --end 2026-07-24 \
+  PYTHONPATH=src nohup ${PY:-python3} -m csi1000.engine.mine_open_horizons --h $h --end 2026-07-24 \
       > "results/mine_open/logs/h$h.log" 2>&1 &
   while [ "$(jobs -rp | wc -l)" -ge "$PAR" ]; do sleep 30; done
 done
 wait
 echo "═══ 全部挖矿完成,开始横向评估 ═══"
-PYTHONPATH=src python3 -m csi1000.engine.eval_open_horizons | tee results/mine_open/eval.log
+PYTHONPATH=src ${PY:-python3} -m csi1000.engine.eval_open_horizons | tee results/mine_open/eval.log
 tar czf mine_open_results.tgz results/mine_open
 echo "═══ 完成:mine_open_results.tgz(拉回本地即可)═══"
