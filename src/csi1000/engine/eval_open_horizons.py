@@ -101,6 +101,7 @@ def 评一库(目录: str, h: int, 面板, 日历) -> dict | None:
     ret = st.结算(p, r, rf, "open").dropna().loc["2018":]
     if len(ret) < 244:
         return None
+    ret.rename("收益").to_csv(os.path.join(目录, "逐日收益_zz1000.csv"))
     nav = (1 + ret).cumprod(); 年 = len(ret) / 244
     ann = nav.iloc[-1] ** (1 / 年) - 1
     dd = (nav / nav.cummax() - 1).min()
@@ -114,6 +115,7 @@ def 评一库(目录: str, h: int, 面板, 日历) -> dict | None:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", type=int, default=None)
+    ap.add_argument("--root", default="mine_open", help="results/ 下的库根目录名")
     a = ap.parse_args()
 
     E.输出目录 = paths.结果_26算子      # 仅为 安装GA 初始化,不写入
@@ -122,7 +124,7 @@ def main():
     面板 = load_all()["classes"]["A股宽基"]["panels"]
     日历 = 面板["close"].index
 
-    根 = os.path.join(paths.根, "results", "mine_open")
+    根 = os.path.join(paths.根, "results", a.root)
     行 = []
     for 目录 in sorted(glob.glob(os.path.join(根, "h*"))):
         h = int(os.path.basename(目录)[1:])

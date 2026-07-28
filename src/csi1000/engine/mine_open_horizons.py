@@ -30,6 +30,8 @@ def main():
                     help="持有期(天):Y=open[T+1+h]/open[T+1]-1")
     ap.add_argument("--end", default=None)
     ap.add_argument("--smoke", action="store_true", help="GA缩到40×5,快速验证管线")
+    ap.add_argument("--seed", type=int, default=42, help="GA种子(换种子复验稳健性)")
+    ap.add_argument("--tag", default="", help="输出目录后缀,如 _s137 → results/mine_open_s137/")
     a = ap.parse_args()
 
     from csi1000 import paths
@@ -43,7 +45,8 @@ def main():
     if a.smoke:
         E.GA参数.update(population=40, generations=5)
 
-    E.输出目录 = os.path.join(paths.根, "results", "mine_open", f"h{a.h}")
+    E.输出目录 = os.path.join(paths.根, "results", f"mine_open{a.tag}", f"h{a.h}")
+    E.GA参数["seed"] = a.seed
     E.安装GA()
     n0 = len(gops.OPS)
     for k in 正典外算子:
