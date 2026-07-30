@@ -20,10 +20,22 @@ def forward_returns(close: pd.DataFrame, horizon: int) -> pd.DataFrame:
 
 
 def ts_rank_ic(factor: pd.DataFrame, fwd_ret: pd.DataFrame) -> tuple[float, float]:
-    """返回 (逐资产 spearman IC 的均值, 有效格覆盖率)。"""
+    """返回 (逐资产 spearman IC 的均值, 有效格覆盖率)。
+
+    输入两张已对齐的 日期×资产 面板：
+      - factor ：因子值面板（expr.evaluate 的产出），每格 = 某天某资产的因子值
+      - fwd_ret：未来收益面板（forward_returns 的产出），已对齐成"今天 vs 今天之后的收益"
+    衡量思路：逐只资产在时间轴上算"因子 vs 未来收益"的秩相关（IC），再对资产取平均，
+    得到该因子的整体预测力；同时报告有多少格子真正可用（覆盖率）。
+    """
+    # 有效格：只有"因子和未来收益都不是 NaN"的格子才能参与计算（& 是逐格逻辑与）
     valid = factor.notna() & fwd_ret.notna()
+    # 覆盖率：布尔面板求均值(True=1/False=0) = 有效格占全部格子的比例；太低说明因子大片为空、质量差
     coverage = valid.to_numpy().mean()
+    # 核心：corrwith 默认逐列(逐资产)沿时间轴求相关；method="spearman"=秩相关(只看排序、抗异常值)
+    # 结果 ics 是每只资产一个 IC 值的 Series，代表"该资产上因子对其未来收益的预测力"
     ics = factor.corrwith(fwd_ret, method="spearman")
+    # 对所有资产的 IC 取平均 = 因子整体预测力；连同覆盖率一并返回（float() 把 numpy 标量转成原生 float）
     return float(ics.mean()), float(coverage)
 
 

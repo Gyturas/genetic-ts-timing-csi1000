@@ -122,6 +122,11 @@ def main():
     global 指数, ETF
     if a.asset:
         指数 = ETF = a.asset
+        from csi1000.walkforward import config as C
+        spec = C.CLASSES["A股宽基"] if hasattr(C, "CLASSES") else None
+        if spec and a.asset not in spec["panel"]:      # 实验资产运行时注入,不入生产配置
+            spec["panel"][a.asset] = f"idx_{a.asset}"
+            spec["etf_map"][a.asset] = [a.asset]
     if a.cost is not None:
         st.成本 = a.cost
 

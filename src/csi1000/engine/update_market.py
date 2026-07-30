@@ -119,46 +119,59 @@ def _更新(tag: str, secid: str, 是指数: bool, 报告: list) -> None:
     cache = paths.行情缓存
     arc = os.path.join(paths.存档, "行情")
     目录s = [cache] + ([arc] if os.path.exists(os.path.join(arc, tag + ".csv")) else [])
-    末 = None
+    末 = None; 修 = 0
     for 目录 in 目录s:
         fp = os.path.join(目录, tag + ".csv")
         if not os.path.exists(fp):
             continue
-        旧 = pd.read_csv(fp, parse_dates=["date"]).set_index("date")
-        if 是指数:
-            新 = _拉(secid, 0)
-            共 = 旧.index.intersection(新.index)[-4:]
-            if len(共) < 2 or (旧.loc[共, "close"] / 新.loc[共, "close"] - 1).abs().max() > 1e-3:
-                报告.append(f"{tag}: ✗close口径不符,跳过"); return
-            比v = (旧.loc[共, "volume"] / 新.loc[共, "volume"]).median() if "volume" in 旧 else 1
-            if not (0.99 < 比v < 1.01) and 比v > 0 and 0.99 < 比v / round(比v) < 1.01:
-                新["volume"] *= round(比v)
-            增 = 新[新.index > 旧.index.max()][list(旧.columns)]
-        else:
-            权 = _拉(secid, 1)
-            共 = 旧.index.intersection(权.index)[-4:]
-            r旧 = 旧.loc[共, "close"].pct_change().dropna()
-            r新 = 权.loc[共, "close"].pct_change().dropna()
-            if len(r旧) < 2 or (r旧 - r新).abs().max() > 1e-3:
-                报告.append(f"{tag}: ✗收益口径不符,跳过"); return
-            m = 旧.index.max(); 锚 = float(旧.loc[m, "close"]); 行 = []
-            for d in 权.index[权.index > m]:
-                rr = float(权.loc[d, "close"]) / float(权["close"].shift(1).loc[d]) - 1
-                锚 *= (1 + rr); b = 锚 / float(权.loc[d, "close"])
-                row = {"date": d, "open": 权.loc[d, "open"] * b, "high": 权.loc[d, "high"] * b,
-                       "low": 权.loc[d, "low"] * b, "close": 锚}
-                if "volume" in 旧.columns:
-                    row["volume"] = 权.loc[d, "volume"] * 100
-                if "amount" in 旧.columns:
-                    row["amount"] = 权.loc[d, "amount"]
-                行.append(row)
-            增 = pd.DataFrame(行).set_index("date")[list(旧.columns)] if 行 else pd.DataFrame()
-        if len(增) == 0:
+        旧全 = pd.read_csv(fp, parse_dates=["date"]).set_index("date")
+        新 = _拉(secid, 0) if 是指数 else None
+        权 = _拉(secid, 1) if not 是指数 else None
+        通过 = False
+        # 数据商偶发"当日收盘初值次日修订"(2026-07-29 实例):最近≤2行与新数据不符时,
+        # 若剔除尾行后重叠段一致,则信任新拉数据、替换被修订的尾行;更早处的不符仍视为
+        # 口径断裂,拒绝写入(保护存量)。
+        for 剔 in (0, 1, 2):
+            旧 = 旧全.iloc[:len(旧全) - 剔] if 剔 else 旧全
+            if len(旧) < 10:
+                break
+            if 是指数:
+                共 = 旧.index.intersection(新.index)[-4:]
+                if len(共) < 2 or (旧.loc[共, "close"] / 新.loc[共, "close"] - 1).abs().max() > 1e-3:
+                    continue
+                比v = (旧.loc[共, "volume"] / 新.loc[共, "volume"]).median() if "volume" in 旧 else 1
+                if not (0.99 < 比v < 1.01) and 比v > 0 and 0.99 < 比v / round(比v) < 1.01:
+                    新["volume"] *= round(比v)
+                增 = 新[新.index > 旧.index.max()][list(旧.columns)]
+            else:
+                共 = 旧.index.intersection(权.index)[-4:]
+                r旧 = 旧.loc[共, "close"].pct_change().dropna()
+                r新 = 权.loc[共, "close"].pct_change().dropna()
+                if len(r旧) < 2 or (r旧 - r新).abs().max() > 1e-3:
+                    continue
+                m = 旧.index.max(); 锚 = float(旧.loc[m, "close"]); 行 = []
+                for d in 权.index[权.index > m]:
+                    rr = float(权.loc[d, "close"]) / float(权["close"].shift(1).loc[d]) - 1
+                    锚 *= (1 + rr); b = 锚 / float(权.loc[d, "close"])
+                    row = {"date": d, "open": 权.loc[d, "open"] * b, "high": 权.loc[d, "high"] * b,
+                           "low": 权.loc[d, "low"] * b, "close": 锚}
+                    if "volume" in 旧.columns:
+                        row["volume"] = 权.loc[d, "volume"] * 100
+                    if "amount" in 旧.columns:
+                        row["amount"] = 权.loc[d, "amount"]
+                    行.append(row)
+                增 = pd.DataFrame(行).set_index("date")[list(旧.columns)] if 行 else pd.DataFrame()
+            通过 = True; 修 = max(修, 剔)
+            break
+        if not 通过:
+            报告.append(f"{tag}: ✗重叠口径不符(非尾部修订),跳过"); return
+        if len(增) == 0 and 剔 == 0:
             末 = 旧.index.max().date()
             continue
         pd.concat([旧, 增]).to_csv(fp)
-        末 = 增.index.max().date()
-    报告.append(f"{tag}: → {末}")
+        末 = (增.index.max() if len(增) else 旧.index.max()).date()
+    注 = f"(修订尾{修}行)" if 修 else ""
+    报告.append(f"{tag}: → {末}{注}")
 
 
 def main() -> str:
