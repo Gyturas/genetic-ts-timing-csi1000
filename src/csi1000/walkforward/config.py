@@ -17,9 +17,11 @@ STATE_DIR = os.path.join(RESULTS, "state")     # 挖矿运行时状态(gitignore
 CLASSES = {
     "A股宽基": {
         "panel": {"hs300": "idx_sh000300", "zz500": "idx_sh000905", "zz1000": "idx_sh000852",
-                  "cyb": "idx_sz399006", "kc50": "idx_sh000688", "hongli": "idx_sh000922"},
+                  "cyb": "idx_sz399006", "kc50": "idx_sh000688", "hongli": "idx_sh000922",
+                  "ew1000": "idx_ew1000"},   # 中证1000成分等权(公募产品标的,自建序列)
         "etf_map": {"510300": ["hs300"], "510500": ["zz500"], "512100": ["zz1000"],
-                    "159915": ["cyb"], "588000": ["kc50"], "510880": ["hongli"]},
+                    "159915": ["cyb"], "588000": ["kc50"], "510880": ["hongli"],
+                    "ew1000": ["ew1000"]},
         "offshore": False,
         "bench": "hs300",           # beta120 基准(面板品种名或 "EW"=面板等权)
     },

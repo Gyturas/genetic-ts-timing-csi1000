@@ -25,7 +25,7 @@ import csi1000.ga_alpha.expr as gexpr
 import csi1000.engine.strategy as st
 from csi1000 import paths
 
-指数, ETF = "zz1000", "512100"
+指数, ETF = "zz1000", "512100"      # 可被 --asset 覆盖(如 ew1000)
 因子窗 = 映射窗 = 40
 参照回看 = 60
 
@@ -101,7 +101,7 @@ def 评一库(目录: str, h: int, 面板, 日历) -> dict | None:
     ret = st.结算(p, r, rf, "open").dropna().loc["2018":]
     if len(ret) < 244:
         return None
-    ret.rename("收益").to_csv(os.path.join(目录, "逐日收益_zz1000.csv"))
+    ret.rename("收益").to_csv(os.path.join(目录, f"逐日收益_{指数}.csv"))
     nav = (1 + ret).cumprod(); 年 = len(ret) / 244
     ann = nav.iloc[-1] ** (1 / 年) - 1
     dd = (nav / nav.cummax() - 1).min()
@@ -116,7 +116,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", type=int, default=None)
     ap.add_argument("--root", default="mine_open", help="results/ 下的库根目录名")
+    ap.add_argument("--asset", default=None, help="评估资产,如 ew1000(默认 zz1000/512100)")
+    ap.add_argument("--cost", type=float, default=None, help="双边费率覆盖,如 0.002")
     a = ap.parse_args()
+    global 指数, ETF
+    if a.asset:
+        指数 = ETF = a.asset
+    if a.cost is not None:
+        st.成本 = a.cost
 
     E.输出目录 = paths.结果_26算子      # 仅为 安装GA 初始化,不写入
     E.安装GA()
