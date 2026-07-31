@@ -142,8 +142,9 @@ def main():
 
     根 = os.path.join(paths.根, "results", a.root)
     行 = []
+    import re
     for 目录 in sorted(glob.glob(os.path.join(根, "h*"))):
-        h = int(os.path.basename(目录)[1:])
+        h = int(re.match(r"h(\d+)", os.path.basename(目录)).group(1))
         if a.only and h != a.only:
             continue
         o = 评一库(目录, h, 面板, 日历)
