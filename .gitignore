@@ -12,6 +12,7 @@ data/cache/panels_etf.pkl
 results/mining/
 results/mine_no_elders/
 results/mine_open*/
+results/mine_xsec*/
 results/state/
 
 # 每日面板/临时产物

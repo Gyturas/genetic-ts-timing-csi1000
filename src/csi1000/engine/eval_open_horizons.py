@@ -118,6 +118,7 @@ def main():
     ap.add_argument("--root", default="mine_open", help="results/ 下的库根目录名")
     ap.add_argument("--asset", default=None, help="评估资产,如 ew1000(默认 zz1000/512100)")
     ap.add_argument("--cost", type=float, default=None, help="双边费率覆盖,如 0.002")
+    ap.add_argument("--xsec", action="store_true", help="注入截面叶子(评估 mine_xsec 库)")
     a = ap.parse_args()
     global 指数, ETF
     if a.asset:
@@ -134,6 +135,9 @@ def main():
     E.安装GA()
     from csi1000.walkforward.data import load_all
     面板 = load_all()["classes"]["A股宽基"]["panels"]
+    if a.xsec:
+        from csi1000.engine.xsec_leaves import 注入
+        注入(面板)
     日历 = 面板["close"].index
 
     根 = os.path.join(paths.根, "results", a.root)
