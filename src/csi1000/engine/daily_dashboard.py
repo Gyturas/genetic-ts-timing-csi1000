@@ -1,33 +1,32 @@
 # -*- coding: utf-8 -*-
-"""每日一键面板:更新行情 → 生成定稿信号 → 出明日仓位 → 自包含 HTML 到桌面。
+"""每日面板(v5.1):更新行情+个股 → 六库合奏+状态层 → 明日仓位 → 桌面 HTML。
 
-用法: PYTHONPATH=src python -m csi1000.engine.daily_dashboard
-产出: ~/Desktop/中证1000_每日面板.html(自动在浏览器打开)
+流程:①更新13标的行情 ②更新个股面板与截面叶子(状态层所需)③重算六库信号
+      ④状态层调制 ⑤生成面板
+用法: PYTHONPATH=src python -m csi1000.engine.daily_dashboard [--k 1.2]
+环境: CSI1000_NO_OPEN=1 时不自动打开浏览器(定时任务用)
 """
 from __future__ import annotations
 
+import argparse
 import base64
+import datetime as dt
 import io
 import os
-import datetime as dt
 
 import numpy as np
 import pandas as pd
-from scipy.stats import norm
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-
-plt.rcParams["font.family"] = ["Arial Unicode MS", "PingFang SC"]
+plt.rcParams["font.family"] = ["Arial Unicode MS"]
 plt.rcParams["axes.unicode_minus"] = False
 
 from csi1000 import paths
-import csi1000.engine.update_market as um
-import csi1000.engine.final_signal as fs
-import csi1000.engine.strategy as st
 
 桌面 = os.path.expanduser("~/Desktop")
+成本 = 0.0005          # 512100 ETF 双边万5(ETF 无印花税,已属保守)
 
 
 def _png(fig) -> str:
@@ -49,149 +48,167 @@ def _指标(ret, rf, 起):
 
 
 def main():
-    print("① 更新行情 …"); 末日 = um.main()
-    print("② 生成定稿信号(约2分钟)…"); fs.main()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--k", type=float, default=1.2)
+    ap.add_argument("--skip-data", action="store_true", help="跳过数据更新(调试用)")
+    a = ap.parse_args()
 
-    # 明日仓位
-    π = pd.read_csv(os.path.join(paths.存档, "映射分位.csv"),
-                    parse_dates=["date"]).set_index("date")
-    comb = pd.read_csv(os.path.join(paths.存档, "分资产逐日.csv"),
-                       index_col=0, parse_dates=True)["512100_仓位"]
-    仓 = pd.Series(np.tanh(norm.ppf(π["π_增强"])), index=π.index).where(π["π_增强"].notna(), 0.0)
-    今 = 仓.index[-1]; 明仓 = float(仓.iloc[-1])
-    πv = float(π["π_增强"].iloc[-1])
-    combs = comb.dropna()
-    combv = float(combs.iloc[-1]); comb日 = combs.index[-1]   # comb 列可能比 π 晚一日更新
+    if not a.skip_data:
+        print("① 更新指数/ETF 行情 …")
+        import csi1000.engine.update_market as um
+        um.main()
+        print("② 更新个股面板与截面叶子(状态层所需)…")
+        import csi1000.engine.update_stocks as us
+        us.main()
+    print("③ 重算六库信号 + 状态层(约5分钟)…")
+    from csi1000.engine.live_v51 import 算
+    d = 算(a.k)
 
-    # 历史回测(拿净值、仓位序列)
-    收, p, r, rf = st.跑一遍(True)
-    收 = 收.dropna()
-    nav = (1 + 收.loc["2018":]).cumprod()
-    持nav = (1 + r.reindex(收.index).fillna(0).loc["2018":]).cumprod()
-    今年 = str(今.year)
+    import csi1000.engine.strategy as st
+    zz = pd.read_csv(os.path.join(paths.行情缓存, "idx_sh000852.csv"),
+                     parse_dates=["date"]).set_index("date")
+    指数收 = zz["close"].pct_change()                       # 同花顺口径:指数收→收
 
-    全 = _指标(收, rf, "2018-01-01"); 年内 = _指标(收, rf, f"{今年}-01-01")
-    持全 = _指标(r.reindex(收.index).fillna(0), rf, "2018-01-01")
+    信号日 = d.index[-1]
+    明仓 = float(d["仓位"].iloc[-1])
+    p6 = float(d["p六库"].iloc[-1])
+    恐慌 = bool(d["恐慌"].iloc[-1])
+    收益, rf = d["收益"], d["货基"]
+    ret = 收益.dropna()
+    nav = (1 + ret.loc["2018":]).cumprod()
+    持nav = (1 + d["标的开→开"].reindex(ret.index).fillna(0).loc["2018":]).cumprod()
+    今年 = str(信号日.year)
+    全 = _指标(ret, rf, "2018-01-01"); 年内 = _指标(ret, rf, f"{今年}-01-01")
+    持全 = _指标(d["标的开→开"].reindex(ret.index).fillna(0), rf, "2018-01-01")
     当前回撤 = float(nav.iloc[-1] / nav.cummax().iloc[-1] - 1)
-
-    # 图1:净值
-    fig, ax = plt.subplots(figsize=(9, 4))
-    ax.plot(nav, lw=2, color="#c0392b", label=f"择时策略 ({nav.iloc[-1]:.1f}×)")
-    ax.plot(持nav, lw=1.3, ls="--", color="#95a5a6", label=f"持有512100 ({持nav.iloc[-1]:.1f}×)")
-    ax.set_yscale("log"); ax.legend(fontsize=10); ax.grid(alpha=0.3)
-    ax.set_title("净值(对数轴,2018起)", fontsize=12)
-    净值图 = _png(fig)
-
-    # 图2:近60日仓位
-    fig, ax = plt.subplots(figsize=(9, 2.6))
-    近 = 仓.tail(60)
-    ax.fill_between(近.index, 近.values * 100, 0, color="#2c6fbb", alpha=0.5, step="mid")
-    ax.axhline(0, color="k", lw=0.5); ax.grid(alpha=0.3)
-    ax.set_title("近60交易日仓位 (%)", fontsize=12)
-    仓位图 = _png(fig)
-
-    def 卡(标, 指, 色="#1a1a1a"):
-        if 指 is None:
-            return ""
-        return f"""<div class=card><div class=t>{标}</div>
-        <div class=g><b style="color:{色}">{指['年化']*100:.1f}%</b><span>年化</span></div>
-        <div class=g><b>{指['夏普']:.2f}</b><span>夏普</span></div>
-        <div class=g><b>{指['回撤']*100:.1f}%</b><span>回撤</span></div>
-        <div class=g><b>{指['卡玛']:.2f}</b><span>卡玛</span></div>
-        <div class=g><b>{指['累计']*100:.0f}%</b><span>累计</span></div></div>"""
 
     方向 = "做多" if 明仓 > 0.02 else ("做空" if 明仓 < -0.02 else "空仓")
     色 = "#c0392b" if 明仓 > 0.02 else ("#27ae60" if 明仓 < -0.02 else "#7f8c8d")
 
-    # ---- 实盘跟踪:仓位确定性可复现,按模型执行时 模型仓位=实盘仓位 ----
-    # 时序(开盘口径):仓位 p[T](T日收盘算)→ T+1开盘建仓 → T+2开盘结算 → 贡献到 收[T+2]
-    r_etf = r.reindex(收.index)                         # 512100 开盘→开盘日收益(与结算口径一致)
-    本周一 = (今 - pd.Timedelta(days=今.weekday())).normalize()
+    # ---- 滚动战绩:从上周一起 ----
+    上周一 = (信号日 - pd.Timedelta(days=信号日.weekday() + 7)).normalize()
+    段 = d.loc[上周一:].copy()
+    段["实际持仓"] = d["仓位"].shift(2).reindex(段.index)     # T日结算的是T-2日信号
+    策累, 持累, 行 = 1.0, 1.0, ""
+    for t, row in 段.iterrows():
+        if not np.isfinite(row["收益"]):
+            continue
+        策累 *= (1 + row["收益"]); 持累 *= (1 + row["标的开→开"])
+        c = "#c0392b" if row["收益"] >= 0 else "#27ae60"
+        ix = 指数收.get(t, np.nan)
+        行 += (f"<tr><td>{t.date()}</td>"
+              f"<td class=r>{row['实际持仓']*100:+.0f}%</td>"
+              f"<td class=r>{row['标的开→开']*100:+.2f}%</td>"
+              f"<td class=r style='color:{c};font-weight:500'>{row['收益']*100:+.2f}%</td>"
+              f"<td class=r style='font-weight:500'>{(策累-1)*100:+.2f}%</td>"
+              f"<td class=r style='color:#aaa'>{ix*100:+.2f}%</td></tr>")
+    周策 = (策累 - 1) * 100; 周持 = (持累 - 1) * 100
 
-    # (A) 本周实盘战绩:本周各交易日,策略实吃日收益 vs 持有
-    本周 = 收.loc[本周一:]
-    本周持 = r_etf.reindex(本周.index).fillna(0)
-    战绩行 = ""
-    策累, 持累 = 1.0, 1.0
-    for d in 本周.index:
-        策累 *= (1 + 收[d]); 持累 *= (1 + 本周持[d])
-        c = "#c0392b" if 收[d] >= 0 else "#27ae60"
-        战绩行 += (f"<tr><td>{d.date()}</td>"
-                 f"<td style='text-align:right;color:{c}'>{收[d]*100:+.2f}%</td>"
-                 f"<td style='text-align:right'>{本周持[d]*100:+.2f}%</td>"
-                 f"<td style='text-align:right;font-weight:600'>{(策累-1)*100:+.2f}%</td></tr>")
-    周策收 = (策累 - 1) * 100; 周持收 = (持累 - 1) * 100
+    # ---- 待结算队列:已定但还没到结算日的仓位 ----
+    队 = ""
+    for i, t in enumerate(d.index[-2:]):
+        队 += (f"<tr><td>{t.date()}</td><td class=r style='color:{色 if i==1 else '#555'};font-weight:500'>"
+              f"{d['仓位'].loc[t]*100:+.1f}%</td>"
+              f"<td class=r style='color:#bbb'>{'次日开盘建仓' if i==1 else '持有中'}</td></tr>")
 
-    # (B) 滚动明细:信号日T收盘出仓 → T+1开盘建仓 → T+2开盘结算,posT 吃到 收[T+2]
-    近信号 = 仓.tail(9)                                  # 含最新2日(仓位已定、收益待结算)
-    滚动行 = ""
-    交易日 = list(收.index)
-    for T, posT in 近信号.items():
-        i = 交易日.index(T) if T in 交易日 else -1
-        结算日 = 交易日[i + 2] if i >= 0 and i + 2 < len(交易日) else None   # 开盘口径滞后2格
-        pc = "#c0392b" if posT > 0.02 else ("#27ae60" if posT < -0.02 else "#7f8c8d")
-        if 结算日 is not None:
-            er, sr = float(r_etf.get(结算日, np.nan)), float(收.get(结算日, np.nan))
-            sc = "#c0392b" if sr >= 0 else "#27ae60"
-            右 = (f"<td style='text-align:right'>{结算日.date()}</td>"
-                 f"<td style='text-align:right'>{er*100:+.2f}%</td>"
-                 f"<td style='text-align:right;color:{sc};font-weight:600'>{sr*100:+.2f}%</td>")
-        else:
-            右 = ("<td style='text-align:right;color:#bbb'>—</td>"
-                 "<td style='text-align:right;color:#bbb'>—</td>"
-                 "<td style='text-align:right;color:#bbb'>待结算</td>")
-        滚动行 += (f"<tr><td>{T.date()}</td>"
-                 f"<td style='text-align:right;color:{pc};font-weight:600'>{posT*100:+.1f}%</td>{右}</tr>")
+    # ---- 图 ----
+    fig, ax = plt.subplots(figsize=(9, 3.6))
+    ax.plot(nav, lw=2, color="#c0392b", label=f"v5.1 策略 ({nav.iloc[-1]:.1f}×)")
+    ax.plot(持nav, lw=1.2, ls="--", color="#95a5a6", label=f"持有512100 ({持nav.iloc[-1]:.1f}×)")
+    ax.set_yscale("log"); ax.legend(fontsize=9); ax.grid(alpha=.3)
+    ax.set_title("净值(对数轴,2018起,open→open 含成本)", fontsize=11)
+    净值图 = _png(fig)
+
+    fig, ax = plt.subplots(figsize=(9, 2.4))
+    近 = d["仓位"].tail(60)
+    ax.fill_between(近.index, 近.values * 100, 0, color="#2c6fbb", alpha=.5, step="mid")
+    恐 = d["恐慌"].tail(60).astype(bool)
+    if 恐.any():
+        ax.fill_between(近.index, -100, 100, where=恐.values, color="#e74c3c", alpha=.08, step="mid")
+    ax.axhline(0, color="k", lw=.5); ax.grid(alpha=.3); ax.set_ylim(-105, 105)
+    ax.set_title("近60日目标仓位 %(红色底纹=恐慌态)", fontsize=11)
+    仓位图 = _png(fig)
+
+    def 卡(标, 指, c="#1a1a1a"):
+        if 指 is None:
+            return ""
+        return (f"<div class=card><div class=t>{标}</div>"
+                f"<div class=g><b style='color:{c}'>{指['年化']*100:.1f}%</b><span>年化</span></div>"
+                f"<div class=g><b>{指['夏普']:.2f}</b><span>夏普</span></div>"
+                f"<div class=g><b>{指['回撤']*100:.1f}%</b><span>回撤</span></div>"
+                f"<div class=g><b>{指['卡玛']:.2f}</b><span>卡玛</span></div>"
+                f"<div class=g><b>{指['累计']*100:.0f}%</b><span>累计</span></div></div>")
 
     html = f"""<!doctype html><html><head><meta charset=utf-8>
 <title>中证1000 每日面板</title><style>
 *{{margin:0;padding:0;box-sizing:border-box}}
-body{{font-family:-apple-system,"PingFang SC",sans-serif;background:#f4f5f7;color:#1a1a1a;padding:24px;max-width:1000px;margin:auto}}
-h1{{font-size:20px;margin-bottom:4px}} .sub{{color:#888;font-size:13px;margin-bottom:20px}}
-.hero{{background:#fff;border-radius:14px;padding:26px;text-align:center;box-shadow:0 1px 4px #0001;margin-bottom:18px}}
-.hero .pos{{font-size:56px;font-weight:700;color:{色};line-height:1}}
-.hero .dir{{font-size:18px;color:{色};margin:6px 0}}
-.hero .meta{{color:#888;font-size:13px}}
-.cards{{display:flex;gap:14px;margin-bottom:18px;flex-wrap:wrap}}
-.card{{background:#fff;border-radius:12px;padding:16px 18px;flex:1;min-width:220px;box-shadow:0 1px 4px #0001}}
-.card .t{{font-size:13px;color:#888;margin-bottom:10px;font-weight:600}}
+body{{font-family:-apple-system,"PingFang SC",sans-serif;background:#f4f5f7;color:#1a1a1a;
+     padding:24px;max-width:1020px;margin:auto}}
+h1{{font-size:20px;margin-bottom:4px}} .sub{{color:#888;font-size:13px;margin-bottom:18px}}
+.hero{{background:#fff;border-radius:14px;padding:24px;text-align:center;
+      box-shadow:0 1px 4px #0001;margin-bottom:16px}}
+.hero .pos{{font-size:54px;font-weight:700;color:{色};line-height:1}}
+.hero .dir{{font-size:17px;color:{色};margin:6px 0}}
+.hero .meta{{color:#888;font-size:12.5px;margin-top:8px}}
+.badge{{display:inline-block;padding:2px 10px;border-radius:10px;font-size:12px;margin-left:6px}}
+.cards{{display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap}}
+.card{{background:#fff;border-radius:12px;padding:14px 16px;flex:1;min-width:230px;box-shadow:0 1px 4px #0001}}
+.card .t{{font-size:12.5px;color:#888;margin-bottom:9px;font-weight:600}}
 .g{{display:inline-block;width:19%;text-align:center;vertical-align:top}}
-.g b{{display:block;font-size:16px}} .g span{{font-size:11px;color:#aaa}}
-img{{width:100%;border-radius:12px;background:#fff;box-shadow:0 1px 4px #0001;margin-bottom:14px}}
-.row{{display:flex;gap:14px;flex-wrap:wrap}} .row>*{{flex:1;min-width:280px}}
-table{{width:100%;background:#fff;border-radius:12px;border-collapse:collapse;overflow:hidden;box-shadow:0 1px 4px #0001;font-size:14px}}
-td{{padding:7px 14px;border-bottom:1px solid #f0f0f0}}
-.lbl{{font-size:13px;font-weight:600;color:#555;margin-bottom:6px}}
-.note{{color:#aaa;font-size:12px;margin-top:16px;line-height:1.6}}
-.row{{margin-bottom:16px;align-items:flex-start}}
+.g b{{display:block;font-size:15px}} .g span{{font-size:10.5px;color:#aaa}}
+img{{width:100%;border-radius:12px;background:#fff;box-shadow:0 1px 4px #0001;margin-bottom:12px}}
+.row{{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;align-items:flex-start}}
+table{{width:100%;background:#fff;border-radius:12px;border-collapse:collapse;overflow:hidden;
+      box-shadow:0 1px 4px #0001;font-size:13px}}
+td{{padding:6px 12px;border-bottom:1px solid #f0f0f0}} .r{{text-align:right}}
+thead td{{color:#888;font-size:11.5px;font-weight:600}}
+.lbl{{font-size:12.5px;font-weight:600;color:#555;margin-bottom:6px}}
+.note{{background:#fff;border-radius:12px;padding:14px 18px;box-shadow:0 1px 4px #0001;
+      font-size:12.5px;color:#555;line-height:1.75;margin-bottom:14px}}
+.note b{{color:#c0392b}}
 </style></head><body>
+
 <h1>中证1000 时序择时 · 每日面板</h1>
-<div class=sub>v4 定稿(双40窗+同质参照系+cos加权+剔元老) · 信号日 {今.date()} · 生成 {dt.datetime.now():%Y-%m-%d %H:%M}</div>
+<div class=sub>v5.1(六库合奏 + 状态层风险预算回收,k={a.k}) · 信号日 {信号日.date()} · 生成 {dt.datetime.now():%Y-%m-%d %H:%M}</div>
 
 <div class=hero>
-  <div style="font-size:14px;color:#888;margin-bottom:8px">下一交易日开盘 · 512100 推荐仓位</div>
+  <div style="font-size:13px;color:#888;margin-bottom:6px">下一交易日 <b>开盘</b> · 512100 目标仓位</div>
   <div class=pos>{明仓*100:+.1f}%</div>
-  <div class=dir>{方向}</div>
-  <div class=meta>组合信号 comb = {combv:+.3f} &nbsp;·&nbsp; 40日分位 π = {πv:.3f} &nbsp;·&nbsp; 当前回撤 {当前回撤*100:.1f}%</div>
+  <div class=dir>{方向}{'<span class=badge style="background:#fdecea;color:#c0392b">恐慌态·多头已折半</span>' if 恐慌 else ''}</div>
+  <div class=meta>六库原始信号 {p6*100:+.1f}% &nbsp;·&nbsp; ×{a.k} 预算回收后截断至 {明仓*100:+.1f}%
+       &nbsp;·&nbsp; 当前回撤 {当前回撤*100:.1f}%</div>
 </div>
 
-<div class=cards>{卡("策略 · 2018至今", 全, 色)}{卡(f"策略 · {今年}年内", 年内)}{卡("持有512100 · 2018至今", 持全, "#7f8c8d")}</div>
+<div class=cards>{卡("v5.1 策略 · 2018至今", 全, 色)}{卡(f"策略 · {今年}年内", 年内)}{卡("持有512100 · 2018至今", 持全, "#7f8c8d")}</div>
+
+<div class=note>
+<b>为什么这里的日收益和同花顺对不上?</b> 同花顺显示的是<b>指数收盘→收盘</b>,本策略在
+<b>开盘</b>成交,结算的是<b>ETF开盘→开盘</b>。二者只共享"隔夜"那一段:<br>
+&nbsp;&nbsp;开→开[t] = 隔夜[t] + <b>昨日</b>日内 &nbsp;&nbsp;|&nbsp;&nbsp; 收→收[t] = 隔夜[t] + <b>今日</b>日内<br>
+A股日内波动占总方差 85% 且前后日不相关,所以两个口径的<b>单日</b>数字几乎正交(近250日相关仅 0.07),
+但<b>长期累计一致</b>(近两年 +51.1% vs +52.2%)。表格最后一列给出指数收→收供对照。
+</div>
 
 <div class=row>
-  <div style="flex:1.15">
-    <div class=lbl>本周实盘战绩(自 {本周一.date()} 周一起 · 按模型仓位每日实吃)</div>
-    <table>
-      <tr style="color:#888;font-size:12px"><td>日期</td><td style="text-align:right">策略当日</td><td style="text-align:right">持有当日</td><td style="text-align:right">本周累计</td></tr>
-      {战绩行}
-      <tr style="font-weight:700;background:#fafafa"><td>本周合计</td><td style="text-align:right;color:{'#c0392b' if 周策收>=0 else '#27ae60'}">{周策收:+.2f}%</td><td style="text-align:right">{周持收:+.2f}%</td><td style="text-align:right">超额 {周策收-周持收:+.2f}%</td></tr>
+  <div style="flex:1.55">
+    <div class=lbl>滚动战绩(自上周一 {上周一.date()} 起 · 按模型仓位实吃)</div>
+    <table><thead><tr><td>结算日</td><td class=r>实际持仓</td><td class=r>标的开→开</td>
+      <td class=r>策略当日</td><td class=r>累计</td><td class=r>指数收→收</td></tr></thead>
+      {行}
+      <tr style="font-weight:700;background:#fafafa"><td>合计</td><td class=r>—</td>
+        <td class=r>{周持:+.2f}%</td>
+        <td class=r style="color:{'#c0392b' if 周策>=0 else '#27ae60'}">{周策:+.2f}%</td>
+        <td class=r>超额 {周策-周持:+.2f}%</td><td class=r style="color:#aaa">—</td></tr>
     </table>
   </div>
   <div style="flex:1">
-    <div class=lbl>信号 → 结算收益(收盘出仓 · 次日开盘建仓 · 隔日开盘结算)</div>
-    <table>
-      <tr style="color:#888;font-size:12px"><td>信号日</td><td style="text-align:right">仓位</td><td style="text-align:right">结算日</td><td style="text-align:right">标的</td><td style="text-align:right">策略</td></tr>
-      {滚动行}
-    </table>
+    <div class=lbl>待结算队列(收盘出信号 → 次日开盘建仓 → 隔日开盘结算)</div>
+    <table><thead><tr><td>信号日</td><td class=r>目标仓位</td><td class=r>状态</td></tr></thead>{队}</table>
+    <div class=note style="margin-top:10px;font-size:12px">
+      成本:双边万5(512100 ETF 无印花税)· 年换手约 5800% → 年成本约 2.9%,<b>已计入</b>上方全部数字。<br>
+      仓位经 ×{a.k} 后截断至 ±100%,<b>无需融资或杠杆</b>;空头腿以 IM 中证1000 股指期货实现。<br>
+      空仓部分吃货基(511880)。
+    </div>
   </div>
 </div>
 
@@ -199,16 +216,19 @@ td{{padding:7px 14px;border-bottom:1px solid #f0f0f0}}
 <img src="{仓位图}">
 
 <div class=note>
-口径(v1.3):信号按当日收盘价产生,次日开盘成交、隔日开盘结算(open→open),回测与实盘同口径;双边万5成本。
-选择偏差已知,保守预期夏普 1.0~1.2(见 v4 审计记录)。此面板为策略输出,非投资建议,自行决策与执行。
+口径:信号 T 日<b>收盘</b>生成 → T+1 <b>开盘</b>建仓 → T+2 开盘结算(结算滞后2格),回测与实盘同口径。
+状态层:limit_net(涨停−跌停占比)20日均的滚动2年分位 &lt;10% 判恐慌(占比约11%交易日),
+恐慌时多头×0.5,整体×{a.k} 回收风险预算。<br>
+选择偏差已知,保守预期夏普 1.2~1.5。此面板为策略输出,非投资建议,自行决策与执行。
 </div>
 </body></html>"""
 
     out = os.path.join(桌面, "中证1000_每日面板.html")
     open(out, "w", encoding="utf-8").write(html)
-    print(f"\n★ 明日推荐仓位 {明仓*100:+.1f}%（{方向}）")
-    print(f"★ 面板已生成: {out}")
-    if not os.environ.get("CSI1000_NO_OPEN"):   # 定时任务里不弹浏览器(launchd 设了该变量)
+    print(f"\n★ 明日开盘目标仓位 {明仓*100:+.1f}%({方向}){' · 恐慌态' if 恐慌 else ''}")
+    print(f"★ 本周(自{上周一.date()})策略 {周策:+.2f}% vs 持有 {周持:+.2f}%")
+    print(f"★ 面板: {out}")
+    if not os.environ.get("CSI1000_NO_OPEN"):
         os.system(f'open "{out}"')
 
 
