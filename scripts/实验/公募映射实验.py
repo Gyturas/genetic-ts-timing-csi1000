@@ -107,7 +107,7 @@ def main():
     o = {"方案": "等权篮子买入持有"}; o.update(统(b, rf)); o["均仓"] = 100; 行.append(o)
 
     t = pd.DataFrame(行)
-    out = os.path.join(paths.根, "docs", "公募等权产品")
+    out = os.path.join(paths.根, "docs", "产品线", "公募等权篮子")
     os.makedirs(out, exist_ok=True)
     t.to_csv(os.path.join(out, "映射方案对比.csv"), index=False)
     print("═══ 方案① 负区间重映射 · 等权篮子(万20+维护费, h1+h5双库信号, 2018起)═══")

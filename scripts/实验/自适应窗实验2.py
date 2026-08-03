@@ -26,7 +26,7 @@ def cos_ic(p, r):
     return float((d.p*d.r).sum()/den) if den > 0 else np.nan
 
 
-def 跑库(目录, h, 自适应):
+def 跑库(目录, h, 模式):   # 模式: fix / old / new
     st_ = pickle.load(open(os.path.join(目录, "state.pkl"), "rb"))
     存 = pd.read_csv(os.path.join(目录, "因子逐日信号.csv.gz"), parse_dates=["date"])
     名 = pd.read_csv(os.path.join(目录, "名册.csv"))
@@ -51,12 +51,24 @@ def 跑库(目录, h, 自适应):
         i0 = max(0, 日历.searchsorted(季日[0]) - 参照回看)
         扩 = 日历[i0:日历.searchsorted(季日[-1]) + 1]
         权重, S缓 = {}, {}
+        W表 = {}
+        if 模式 == "new":                                   # 排位换手钟:T=mean|Δrank40|
+            T表 = {}
+            for f in 本.因子.unique():
+                vv = 值[f].loc[cutoff - pd.DateOffset(years=2) - pd.Timedelta(days=80):cutoff]
+                rk = vv.rolling(40).rank(pct=True).dropna()
+                T表[f] = rk.diff().abs().mean() if len(rk) >= 250 else np.nan
+            Tmed = np.nanmedian(list(T表.values()))
+            for f, T in T表.items():
+                W表[f] = int(np.clip(40*np.sqrt(Tmed/T), 25, 100)) if np.isfinite(T) and T > 0 else 40
         for f, g in 本.groupby("因子"):
             v = 值[f]
-            if 自适应:
+            if 模式 == "old":
                 vv = v.loc[cutoff - pd.DateOffset(years=2):cutoff].dropna()
                 ρ = vv.autocorr(1) if len(vv) >= 250 else np.nan
                 W = int(np.clip(30*(1+ρ)/(1-ρ), 20, 250)) if np.isfinite(ρ) and ρ < 1 else 40
+            elif 模式 == "new":
+                W = W表.get(f, 40)
             else:
                 W = 40
             起算 = 权起 - pd.Timedelta(days=int((W + 40) * 1.7) + 20)   # 覆盖W+单仓40共80+行的交易日
@@ -99,19 +111,19 @@ rf = st.读价("etf_511880").pct_change().clip(lower=0)
 出 = {}
 for lib, h in [("results/mine_open/h1", 1), ("results/mine_open/h5", 5)]:
     名 = os.path.basename(lib)
-    for 自 in (False, True):
-        tag = f"{名}_{'自适应' if 自 else '固定40'}"
-        ret, 窗, ic = 跑库(lib, h, 自)
+    for 模式, 模名 in [("fix", "固定40"), ("new", "修正版")]:
+        tag = f"{名}_{模名}"
+        ret, 窗, ic = 跑库(lib, h, 模式)
         出[tag] = ret
         统(tag, ret, rf)
-        if 自:
+        if 模式 == "new":
             print(f"  窗分布: 中位{窗.W.median():.0f}  P25/P75 {窗.W.quantile(.25):.0f}/{窗.W.quantile(.75):.0f}  "
                   f"=250占比{(窗.W>=250).mean()*100:.0f}%  ≤40占比{(窗.W<=40).mean()*100:.0f}%", flush=True)
         else:
-            旧 = pd.read_csv(f"docs/开盘挖矿实验/逐日收益/{名}_s42.csv", index_col=0, parse_dates=True).iloc[:, 0]
+            旧 = pd.read_csv(f"docs/实验档案/01_开盘挖矿与horizon/逐日收益/{名}_s42.csv", index_col=0, parse_dates=True).iloc[:, 0]
             差 = (ret - 旧.reindex(ret.index)).abs().max()
             print(f"  对照复现检查 vs 档案: 最大偏差 {差:.2e} {'✓' if 差 < 1e-10 else '✗不一致!'}", flush=True)
-for 名t, keys in [("双库合奏·固定40", ["h1_固定40", "h5_固定40"]), ("双库合奏·自适应", ["h1_自适应", "h5_自适应"])]:
+for 名t, keys in [("双库合奏·固定40", ["h1_固定40", "h5_固定40"]), ("双库合奏·修正版", ["h1_修正版", "h5_修正版"])]:
     统(名t, pd.concat([出[k] for k in keys], axis=1).dropna().mean(axis=1), rf)
-pd.DataFrame({k: v for k, v in 出.items()}).to_csv("results/自适应窗实验_逐日.csv")
+pd.DataFrame({k: v for k, v in 出.items()}).to_csv("results/自适应窗实验2_逐日.csv")
 print("DONE", flush=True)

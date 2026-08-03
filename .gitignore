@@ -7,15 +7,19 @@ __pycache__/
 .env
 .vscode/
 
-# 派生缓存(首次运行自建,不入库)
-data/cache/panels_etf.pkl
+# 派生缓存(首次运行自建)
+data/cache/panels_*.pkl
+data/cache/intraday/            # 日内5m数据 1GB+,按需用 scripts/数据/ 重拉
+
+# 挖矿产物(每库约50MB,按需重挖或从 pod 取回)
 results/mining/
 results/mine_no_elders/
 results/mine_open*/
 results/mine_xsec*/
 results/state/
 
-# 每日面板/临时产物
+# 打包与临时产物
+*.tgz
 *.command.log
-
+*.tmp
 logs/
