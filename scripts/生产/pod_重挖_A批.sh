@@ -24,14 +24,17 @@ mkdir -p logs/重挖
 
 # 按【决策价值】排序:先出生产六库,再出 S4 的决胜两库,最后是横向表与 v4.1 基线。
 # 中途没时间了也能保住最要紧的部分。
+# 注意两个入口的目录构造【不一样】,别照抄 --tag:
+#   mine_open_horizons → results/mine_open{tag}/h{h}        seed 不在叶子名里,换种子【要】 --tag
+#   mine_xsec          → results/mine_xsec{tag}/h{h}_s{seed} seed 已在叶子名里,换种子【不要】 --tag
 #        DIR                          MOD                   额外参数
 JOBS=(
   "results/mine_open/h1|mine_open_horizons|--h 1"
   "results/mine_open/h5|mine_open_horizons|--h 5"
   "results/mine_xsec/h1_s42|mine_xsec|--h 1 --seed 42"
   "results/mine_xsec/h5_s42|mine_xsec|--h 5 --seed 42"
-  "results/mine_xsec/h1_s137|mine_xsec|--h 1 --seed 137 --tag _s137"
-  "results/mine_xsec/h5_s137|mine_xsec|--h 5 --seed 137 --tag _s137"
+  "results/mine_xsec/h1_s137|mine_xsec|--h 1 --seed 137"
+  "results/mine_xsec/h5_s137|mine_xsec|--h 5 --seed 137"
   "results/mine_open_s137/h1|mine_open_horizons|--h 1 --seed 137 --tag _s137"
   "results/mine_open_s137/h5|mine_open_horizons|--h 5 --seed 137 --tag _s137"
   "results/mine_open/h2|mine_open_horizons|--h 2"
