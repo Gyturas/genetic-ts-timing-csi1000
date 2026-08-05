@@ -1,5 +1,5 @@
 #!/bin/bash
-# 中证1000 v5.1 每日更新核心脚本(.command 与 launchd 共用)
+# 中证1000 v5.2 每日更新核心脚本(.command 与 launchd 共用)
 # 用法: 每日更新.sh [--git]   --git 时在成功后自动提交数据与结果
 set -o pipefail
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:$PATH"
@@ -9,7 +9,7 @@ REPO="$HOME/Desktop/中证1000择时"
 cd "$REPO" || { echo "❌ 找不到仓库 $REPO"; exit 1; }
 [ -x "$PY" ] || { echo "❌ Python 不在 $PY"; exit 1; }
 
-echo "════════ 中证1000 v5.1 · $(date '+%Y-%m-%d %H:%M') ════════"
+echo "════════ 中证1000 v5.2 · $(date '+%Y-%m-%d %H:%M') ════════"
 PYTHONPATH=src "$PY" -m csi1000.engine.daily_dashboard --k 1.2
 CODE=$?
 [ $CODE -ne 0 ] && { echo "❌ 更新失败(退出码 $CODE)"; exit $CODE; }

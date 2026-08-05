@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """每日面板(v5.2):更新行情+个股 → 四库合奏(旧叶双种子)+状态层 → 明日仓位 → 桌面 HTML。
 
-流程:①更新13标的行情 ②更新个股面板与截面叶子(状态层所需)③重算六库信号
+流程:①更新13标的行情 ②更新个股面板与截面叶子(状态层所需)③重算生产四库信号
       ④状态层调制 ⑤生成面板
 用法: PYTHONPATH=src python -m csi1000.engine.daily_dashboard [--k 1.2]
 环境: CSI1000_NO_OPEN=1 时不自动打开浏览器(定时任务用)
@@ -60,7 +60,7 @@ def main():
         print("② 更新个股面板与截面叶子(状态层所需)…")
         import csi1000.engine.update_stocks as us
         us.main()
-    print("③ 重算六库信号 + 状态层(约5分钟)…")
+    print("③ 重算生产四库信号 + 状态层(约4分钟)…")
     from csi1000.engine.live_v51 import 算, 六库
     d = 算(a.k)
     库总 = len(六库)
