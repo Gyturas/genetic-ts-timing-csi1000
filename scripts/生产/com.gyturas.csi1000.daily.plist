@@ -6,18 +6,13 @@
   <key>WorkingDirectory</key><string>/Users/yilinzhou/Desktop/中证1000择时</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/Library/Frameworks/Python.framework/Versions/3.11/bin/python3</string>
-    <string>-m</string><string>csi1000.engine.daily_dashboard</string>
-    <string>--k</string><string>1.2</string>
+    <string>/bin/bash</string>
+    <string>/Users/yilinzhou/Desktop/中证1000择时/scripts/生产/每日更新.sh</string>
+    <string>--git</string>
   </array>
   <key>EnvironmentVariables</key>
-  <dict>
-    <key>PYTHONPATH</key><string>/Users/yilinzhou/Desktop/中证1000择时/src</string>
-    <key>PATH</key><string>/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin</string>
-    <key>MPLBACKEND</key><string>Agg</string>
-    <key>CSI1000_NO_OPEN</key><string>1</string>
-  </dict>
-  <!-- 工作日 16:30(15:30 会拉到未定稿收盘价,曾致 07-29 全线卡死) -->
+  <dict><key>CSI1000_NO_OPEN</key><string>1</string></dict>
+  <!-- 收盘后 16:30(本机时区=Asia/Shanghai,即中国时间);15:30 会拉到未定稿收盘价 -->
   <key>StartCalendarInterval</key>
   <array>
     <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>30</integer></dict>

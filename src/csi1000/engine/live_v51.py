@@ -9,7 +9,13 @@
 口径:信号 T 日收盘生成 → T+1 开盘建仓 → T+2 开盘结算(open→open,结算滞后2格)。
 每日全量重算(不做增量延算——v3 延算曾因黄牌口径/存档缺行翻车)。
 
-产出 results/final/v51_逐日.csv:date, p六库, 恐慌, 仓位, 收益
+口径纪律(2026-08-05 审计后固化,详见 docs/因子库缺陷审计.md):
+  · 剔尾条数 = h+1(不是 1)。r次[d]=open[d+1+h]/open[d+1]−1 用到 d+1+h 日开盘价。
+  · cos IC 至少 最少配对 对样本才给权重。
+  · 六库缺一即抛错,不静默降级;截面叶子落后于信号即抛错(NaN<0.10 恒 False)。
+  · 整季无正权写 NaN 而非丢日期(结算 shift(2) 是位置型,缺季会错接跨季仓位)。
+
+产出 results/final/v51_逐日.csv:date, p六库, 恐慌, 仓位, 收益, 库数
 用法: PYTHONPATH=src python -m csi1000.engine.live_v51 [--k 1.2]
 """
 from __future__ import annotations
@@ -29,6 +35,7 @@ from csi1000 import paths
 TRAILING月 = 12
 恐慌分位, 恐慌窗, 恐慌均 = 0.10, 504, 20      # 预注册,勿调参
 多头折 = 0.5
+最少配对 = 120                                # cos IC 最小样本量(≈半年),预注册阈值
 
 六库 = [("results/mine_open/h1",       1, False),
        ("results/mine_open/h5",       5, False),
@@ -44,7 +51,10 @@ def _单仓(S):
 
 
 def _cos(p, r):
+    """P&L 对齐的 cos 相似度。样本不足 最少配对 时返回 nan(该因子当季不给权重)。"""
     d = pd.concat([p.rename("p"), r.rename("r")], axis=1).dropna()
+    if len(d) < 最少配对:
+        return np.nan
     den = np.sqrt((d.p ** 2).sum() * (d.r ** 2).sum())
     return float((d.p * d.r).sum() / den) if den > 0 else np.nan
 
@@ -53,14 +63,14 @@ def 一库π(目录: str, h: int, 面板, 日历, E, gexpr) -> pd.Series | None:
     """重算单库的映射分位 π(与 eval_open_horizons 同口径,季内治理沿用存档)。"""
     需 = [os.path.join(paths.根, 目录, f) for f in ("state.pkl", "因子逐日信号.csv.gz", "名册.csv")]
     if not all(os.path.exists(f) for f in 需):
-        return None
+        return None, {"错": "产物不全"}
     st_ = pickle.load(open(需[0], "rb"))
     存 = pd.read_csv(需[1], parse_dates=["date"])
     名 = pd.read_csv(需[2])
     元老 = set(名[名.kind.isin(["elder", "argarch"])]["编号"])
     治理 = 存[(存.指数 == "zz1000") & (~存.因子.isin(元老))]
     if len(治理) == 0:
-        return None
+        return None, {"错": "无在役非元老因子"}
     r次 = 面板["open"]["zz1000"].pct_change(h, fill_method=None).shift(-(h + 1))
 
     信号, p表 = {}, {}
@@ -73,9 +83,13 @@ def 一库π(目录: str, h: int, 面板, 日历, E, gexpr) -> pd.Series | None:
         p表[f] = _单仓(信号[f])
 
     π全 = pd.Series(dtype=float)
+    诊断 = {"缺季": [], "薄季": [], "零权季": [], "末季正权": None, "末季在册": None}
     for q in E.quarter_list("2015-01-01", str(日历[-1].date())):
         本 = 治理[(治理.date >= q.start_time) & (治理.date <= q.end_time)]
         if len(本) == 0:
+            # 存档滞后于行情时本季无名册行 → 该库整季无 π,六库合奏会静默退化为五库
+            if len(日历[(日历 >= q.start_time) & (日历 <= q.end_time)]):
+                诊断["缺季"].append(str(q))
             continue
         # 季日取交易日历:存档末日之后的新交易日照常进入本季,名单/黄牌沿用本季存档值
         # (季内治理事件不变,故合法)——实盘延伸依赖此行为
@@ -88,12 +102,23 @@ def 一库π(目录: str, h: int, 面板, 日历, E, gexpr) -> pd.Series | None:
         权重 = {}
         for f, g in 本.groupby("因子"):
             黄 = g.sort_values("date")["黄牌"].iloc[0]
-            c = _cos(p表[f].loc[起:cutoff].iloc[:-1], r次.loc[起:cutoff].iloc[:-1])
+            # 剔尾 h+1:r次[d]=open[d+1+h]/open[d+1]−1 用到 d+1+h 日开盘价,
+            # 季初定权重时只知道 ≤cutoff 的价格,窗口末 h+1 行决策时点不可得。
+            # (close 口径的 final_signal 用 returns.shift(-1),只需剔 1 行,勿照抄。)
+            c = _cos(p表[f].loc[起:cutoff].iloc[:-(h + 1)],
+                     r次.loc[起:cutoff].iloc[:-(h + 1)])
             if np.isfinite(c) and c > 0:
                 权重[f] = c * (0.5 if 黄 else 1.0)
         总 = sum(权重.values())
+        诊断["末季正权"], 诊断["末季在册"] = len(权重), 本.因子.nunique()
         if 总 <= 0:
+            # 整季无正权 → 写 NaN 占位(下游 where(notna) 变空仓),不能丢日期:
+            # strategy.结算 的 shift(2) 是位置型,缺季会把跨季仓位错接且不报错
+            诊断["零权季"].append(str(q))
+            π全 = pd.concat([π全, pd.Series(np.nan, index=季日)])
             continue
+        if len(权重) < E.烧机最少:
+            诊断["薄季"].append(f"{q}({len(权重)})")
         减半 = 0.5 if len(权重) < E.烧机最少 else 1.0
         i0 = max(0, 日历.searchsorted(季日[0]) - 参照回看)
         扩 = 日历[i0:日历.searchsorted(季日[-1]) + 1]
@@ -104,7 +129,7 @@ def 一库π(目录: str, h: int, 面板, 日历, E, gexpr) -> pd.Series | None:
         πq = (合.rolling(映射窗).rank(pct=True) - 0.5 / 映射窗).clip(1e-6, 1 - 1e-6)
         πq = πq.where(合.abs().gt(1e-12))
         π全 = pd.concat([π全, πq.loc[季日]])
-    return π全[~π全.index.duplicated()]
+    return π全[~π全.index.duplicated()], 诊断
 
 
 def 算(k: float = 1.2, 详细: bool = True) -> pd.DataFrame:
@@ -124,16 +149,24 @@ def 算(k: float = 1.2, 详细: bool = True) -> pd.DataFrame:
     xsec面板 = {k2: v.copy() for k2, v in 基面板.items()}
     注入(xsec面板)
 
-    仓位表 = []
+    仓位表, 缺库 = [], []
     for 目录, h, 用xsec in 六库:
-        π = 一库π(目录, h, xsec面板 if 用xsec else 基面板, 日历, E, gexpr)
+        π, 诊 = 一库π(目录, h, xsec面板 if 用xsec else 基面板, 日历, E, gexpr)
         if π is None or len(π) == 0:
-            if 详细: print(f"  {目录}: 跳过(产物不全)")
+            缺库.append(f"{os.path.basename(目录)}({诊.get('错', '空π')})")
             continue
         仓位表.append(pd.Series(np.tanh(norm.ppf(π)), index=π.index).where(π.notna(), 0.0))
-        if 详细: print(f"  {os.path.basename(目录):12s} h={h} → {len(π)}天,末值 {仓位表[-1].iloc[-1]:+.3f}")
-    if not 仓位表:
-        raise RuntimeError("六库全部不可用")
+        if 详细:
+            警 = ""
+            if 诊["缺季"]: 警 += f"  ⚠存档缺{len(诊['缺季'])}季(最近{诊['缺季'][-1]})"
+            if 诊["零权季"]: 警 += f"  ⚠零权{len(诊['零权季'])}季"
+            if 诊["薄季"]: 警 += f"  ⚠薄季{len(诊['薄季'])}次"
+            print(f"  {os.path.basename(目录):12s} h={h} → {len(π)}天,末值 {仓位表[-1].iloc[-1]:+.3f}"
+                  f"  末季正权{诊['末季正权']}/{诊['末季在册']}{警}")
+    # 分散化前提是六库都在。缺库不是「少一点分散」,是把种子/horizon 噪音又放回来了
+    if len(仓位表) != len(六库):
+        raise RuntimeError(f"仅 {len(仓位表)}/{len(六库)} 库可用,缺:{'、'.join(缺库)}。"
+                           f"六库合奏是预注册配置,不接受静默降级——修好产物或显式改 六库 常量。")
     共 = 仓位表[0].index
     for x in 仓位表[1:]:
         共 = 共.union(x.index)
@@ -142,8 +175,17 @@ def 算(k: float = 1.2, 详细: bool = True) -> pd.DataFrame:
     # ---- 状态层:恐慌态多头折半 + 整体×k 回收风险预算 ----
     叶 = pd.read_csv(os.path.join(paths.存档, "截面叶子.csv"),
                      parse_dates=["date"]).set_index("date")
-    恐慌 = (叶["limit_net"].rolling(恐慌均).mean()
-            .rolling(恐慌窗).rank(pct=True).reindex(p6.index) < 恐慌分位)
+    # NaN < 0.10 恒为 False → 叶子断更时状态层静默失效,且失效方向是「不保护」。必须显式校验。
+    if 叶.index.max() < p6.index.max():
+        raise RuntimeError(f"截面叶子末日 {叶.index.max().date()} 落后于信号末日 "
+                           f"{p6.index.max().date()},状态层会静默失效(方向=不保护)。"
+                           f"先跑 update_stocks。")
+    分位 = (叶["limit_net"].rolling(恐慌均).mean()
+            .rolling(恐慌窗).rank(pct=True).reindex(p6.index))
+    缺 = 分位.isna().sum()
+    if 缺 and 详细:
+        print(f"  ⚠ 状态层 {缺} 天无分位(建仓期),按非恐慌处理:{list(分位[分位.isna()].index[:3].date)}")
+    恐慌 = 分位 < 恐慌分位
     调 = p6.where(~恐慌, p6.where(p6 < 0, p6 * 多头折))
     仓位 = (调 * k).clip(-1, 1)
 
@@ -154,6 +196,7 @@ def 算(k: float = 1.2, 详细: bool = True) -> pd.DataFrame:
     出 = pd.DataFrame({"p六库": p6, "恐慌": 恐慌.astype(int), "仓位": 仓位,
                       "收益": 收益, "标的开→开": r.reindex(仓位.index),
                       "货基": rf.reindex(仓位.index)}).dropna(subset=["仓位"])
+    出["库数"] = len(仓位表)          # 面板显示用:合奏实际由几个库构成
     os.makedirs(paths.结果, exist_ok=True)
     出.to_csv(os.path.join(paths.结果, "v51_逐日.csv"))
     return 出

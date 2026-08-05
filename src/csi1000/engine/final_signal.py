@@ -30,6 +30,7 @@ from csi1000 import paths
 映射窗 = 40          # 第二层(同 v3)
 参照回看 = 60        # 同质参照系向季前多算的交易日数(>映射窗 即可)
 TRAILING月 = 12
+最少配对 = 120        # cos IC 最小样本量(≈半年),与 live_v51/eval_open_horizons 同门槛
 
 
 def main():
@@ -68,12 +69,23 @@ def main():
     print(f"重算 {len(信号)} 个因子信号(rank{因子窗})")
 
     def cos_ic(p, r):
+        """样本不足 最少配对 时返回 nan。cos IC 是比值,样本少时数值照样落在 (0,1],
+        「几乎无有效信号」的因子会凭少数巧合样本拿到全库最大权重。与 live_v51 同门槛。"""
         d = pd.concat([p.rename("p"), r.rename("r")], axis=1).dropna()
+        if len(d) < 最少配对:
+            return np.nan
         den = np.sqrt((d.p ** 2).sum() * (d.r ** 2).sum())
         return float((d.p * d.r).sum() / den) if den > 0 else np.nan
 
     ΔS = pd.read_csv(os.path.join(paths.存档, "熊增强逐日.csv"),
                      parse_dates=["date"]).set_index("date")["ΔS_512100"]
+    # 下面 S增 = 合 + ΔS.reindex(扩).fillna(0.0) 会把缺日静默填 0,而填 0 日与有值日
+    # 同处一个 40 日映射窗 —— 存档一旦落后,"熊增强"口径会悄悄退化成"仅量价",
+    # 而输出文件名与成绩表标签仍写着熊增强。落后多少天必须看得见。
+    滞后 = int((日历 > ΔS.index.max()).sum())
+    if 滞后:
+        print(f"⚠ 熊增强存档末日 {ΔS.index.max().date()} 落后行情 {滞后} 个交易日,"
+              f"这些日期的 ΔS 被填 0(近期 ΔS 若非零则口径已失真,先跑 bear_factor/family_retilt)")
 
     comb定格 = pd.Series(dtype=float)
     π增, π价 = pd.Series(dtype=float), pd.Series(dtype=float)

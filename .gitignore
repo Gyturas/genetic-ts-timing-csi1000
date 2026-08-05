@@ -23,3 +23,5 @@ results/state/
 *.command.log
 *.tmp
 logs/
+面板.html
+今日仓位.txt

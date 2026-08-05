@@ -6,7 +6,15 @@
 加权用的前瞻收益与该库挖矿目标一致(h 日开盘前瞻),保证选出因子被按其所长加权;
 最终结算一律逐日,7 个 h 可直接同表相比,并与 ops26 定稿基线(26.9%/1.25)对照。
 
-产出: results/mine_open/横向对比.csv
+口径纪律(2026-08-05 审计后固化):
+  · 剔尾条数 = h+1。r次[d]=open[d+1+h]/open[d+1]−1 用到 d+1+h 日开盘价,
+    季初定权重时只知道 ≤cutoff 的价格,故窗口末 h+1 行不可得。
+    (close 口径的 final_signal 用 次日收益=returns.shift(-1),只需剔 1 行,勿照抄。)
+  · cos IC 至少 最少配对 对样本才给权重,避免几个巧合样本拿到全库最大权重。
+  · 评估末日与生产一致(C.END 取行情文件实际末日),不吃 config 硬编码日期。
+  · 非默认口径(--asset/--cost)的产物带指纹,绝不覆盖库目录里的生产成绩单。
+
+产出: results/<root>/横向对比.csv(按库名 upsert 合并,不整表覆盖)
 用法: PYTHONPATH=src python -m csi1000.engine.eval_open_horizons [--only 3]
 """
 from __future__ import annotations
@@ -28,6 +36,8 @@ from csi1000 import paths
 指数, ETF = "zz1000", "512100"      # 可被 --asset 覆盖(如 ew1000)
 因子窗 = 映射窗 = 40
 参照回看 = 60
+最少配对 = 120                       # cos IC 最小样本量(≈半年),预注册阈值
+产物后缀 = ""                        # 非默认口径时由 main 填指纹
 
 
 def 单仓(S):
@@ -36,7 +46,10 @@ def 单仓(S):
 
 
 def cos_ic(p, r):
+    """P&L 对齐的 cos 相似度。样本不足 最少配对 时返回 nan(该因子当季不给权重)。"""
     d = pd.concat([p.rename("p"), r.rename("r")], axis=1).dropna()
+    if len(d) < 最少配对:
+        return np.nan
     den = np.sqrt((d.p ** 2).sum() * (d.r ** 2).sum())
     return float((d.p * d.r).sum() / den) if den > 0 else np.nan
 
@@ -71,16 +84,23 @@ def 评一库(目录: str, h: int, 面板, 日历) -> dict | None:
             continue
         季日 = 日历[(日历 >= q.start_time) & (日历 <= q.end_time)]
         季日 = 季日[季日 >= 本.date.min()]
+        if len(季日) == 0:
+            continue
         cutoff = q.start_time - pd.Timedelta(days=1)
         起 = cutoff - pd.DateOffset(months=12)
         权重 = {}
         for f, g in 本.groupby("因子"):
             黄 = g.sort_values("date")["黄牌"].iloc[0]
-            c = cos_ic(p表[f].loc[起:cutoff].iloc[:-1], r次.loc[起:cutoff].iloc[:-1])
+            # 剔尾 h+1:窗口末 h+1 行的 Y 依赖 cutoff 之后的开盘价,决策时点不可得
+            c = cos_ic(p表[f].loc[起:cutoff].iloc[:-(h + 1)],
+                       r次.loc[起:cutoff].iloc[:-(h + 1)])
             if np.isfinite(c) and c > 0:
                 权重[f] = c * (0.5 if 黄 else 1.0)
         总 = sum(权重.values())
         if 总 <= 0:
+            # 整季无正权 → 写 NaN 占位(下游 where(notna) 变空仓),不能丢日期:
+            # strategy.结算 的 shift(2) 是位置型,缺季会把跨季仓位错接且不报错
+            π全 = pd.concat([π全, pd.Series(np.nan, index=季日)])
             continue
         减半 = 0.5 if len(权重) < E.烧机最少 else 1.0
         i0 = max(0, 日历.searchsorted(季日[0]) - 参照回看)
@@ -101,15 +121,30 @@ def 评一库(目录: str, h: int, 面板, 日历) -> dict | None:
     ret = st.结算(p, r, rf, "open").dropna().loc["2018":]
     if len(ret) < 244:
         return None
-    ret.rename("收益").to_csv(os.path.join(目录, f"逐日收益_{指数}.csv"))
+    ret.rename("收益").to_csv(os.path.join(目录, f"逐日收益_{指数}{产物后缀}.csv"))
     nav = (1 + ret).cumprod(); 年 = len(ret) / 244
     ann = nav.iloc[-1] ** (1 / 年) - 1
     dd = (nav / nav.cummax() - 1).min()
     ex = ret - rf.reindex(ret.index).fillna(0)
-    return dict(h=h, 在役因子=治理.因子.nunique(), 年化=round(ann * 100, 1),
+    return dict(库=os.path.basename(目录), h=h, 在役因子=治理.因子.nunique(),
+                年化=round(ann * 100, 1),
                 夏普=round(float(ex.mean() / ex.std() * np.sqrt(244)), 2),
                 回撤=round(dd * 100, 1), 卡玛=round(ann / abs(dd), 2),
-                均仓=round(float(p.abs().mean() * 100)))
+                均仓=round(float(p.abs().mean() * 100)),
+                标的=ETF, 成本=st.成本, 末日=str(ret.index[-1].date()))
+
+
+def 合表(fp: str, 行: list) -> pd.DataFrame:
+    """按【库】upsert 合并,不整表覆盖 —— --only 的部分运行不得抹掉其余行。"""
+    新 = pd.DataFrame(行)
+    if os.path.exists(fp):
+        旧 = pd.read_csv(fp)
+        if "库" in 旧.columns:
+            旧 = 旧[~旧["库"].isin(新["库"])]
+            新 = pd.concat([旧, 新], ignore_index=True)
+        else:
+            print(f"  提示:{os.path.basename(fp)} 为无「库」列的旧格式,本次整表重建")
+    return 新.sort_values(["h", "库"]).reset_index(drop=True)
 
 
 def main():
@@ -120,7 +155,7 @@ def main():
     ap.add_argument("--cost", type=float, default=None, help="双边费率覆盖,如 0.002")
     ap.add_argument("--xsec", action="store_true", help="注入截面叶子(评估 mine_xsec 库)")
     a = ap.parse_args()
-    global 指数, ETF
+    global 指数, ETF, 产物后缀
     if a.asset:
         指数 = ETF = a.asset
         from csi1000.walkforward import config as C
@@ -130,7 +165,15 @@ def main():
             spec["etf_map"][a.asset] = [a.asset]
     if a.cost is not None:
         st.成本 = a.cost
+    if a.asset or a.cost is not None:
+        # 非生产口径的产物必须带指纹。历史教训:2026-07-29 公募等权篮子实验
+        # (ew1000+千二)用当时硬编码的文件名写回 mine_open/h5,把该库 37.0% 记成 26.7%。
+        产物后缀 = f"_{ETF}_c{st.成本:g}"
+        print(f"非默认口径 → 产物写为 逐日收益_{指数}{产物后缀}.csv(不覆盖生产成绩单)")
 
+    from csi1000.walkforward import config as C
+    C.END = str(pd.read_csv(os.path.join(paths.行情缓存, "idx_sh000852.csv"),
+                            usecols=["date"])["date"].max())      # 与 live_v51 同末日
     E.输出目录 = paths.结果_26算子      # 仅为 安装GA 初始化,不写入
     E.安装GA()
     from csi1000.walkforward.data import load_all
@@ -139,6 +182,7 @@ def main():
         from csi1000.engine.xsec_leaves import 注入
         注入(面板)
     日历 = 面板["close"].index
+    print(f"评估末日 C.END={C.END}  行情末日={日历[-1].date()}  成本={st.成本:g}")
 
     根 = os.path.join(paths.根, "results", a.root)
     行 = []
@@ -148,14 +192,14 @@ def main():
         if a.only and h != a.only:
             continue
         o = 评一库(目录, h, 面板, 日历)
-        print(f"h={h}: " + (str(o) if o else "产物不全/无在役因子,跳过"))
+        print(f"{os.path.basename(目录)}: " + (str(o) if o else "产物不全/无在役因子,跳过"))
         if o:
             行.append(o)
     if 行:
-        df = pd.DataFrame(行).sort_values("h")
-        fp = os.path.join(根, "横向对比.csv")
+        fp = os.path.join(根, f"横向对比{产物后缀}.csv")
+        df = 合表(fp, 行)
         df.to_csv(fp, index=False)
-        print("\n═══ 开盘口径挖矿 · h=1..7 横向(中证1000,逐日调仓,open→open,2018起)═══")
+        print(f"\n═══ 开盘口径挖矿 · 横向(中证1000,逐日调仓,open→open,2018起)═══")
         print(df.to_string(index=False))
         print(f"\n基线(ops26 定稿,close口径挖矿+open结算): 年化26.9% 夏普1.25 卡玛1.44")
         print("已存:", fp)

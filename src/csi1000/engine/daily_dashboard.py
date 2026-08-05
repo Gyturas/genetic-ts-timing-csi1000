@@ -25,7 +25,7 @@ plt.rcParams["axes.unicode_minus"] = False
 
 from csi1000 import paths
 
-桌面 = os.path.expanduser("~/Desktop")
+输出目录 = paths.根          # 面板与快照都放仓库根目录(与 .command 同处)
 成本 = 0.0005          # 512100 ETF 双边万5(ETF 无印花税,已属保守)
 
 
@@ -73,6 +73,7 @@ def main():
     明仓 = float(d["仓位"].iloc[-1])
     p6 = float(d["p六库"].iloc[-1])
     恐慌 = bool(d["恐慌"].iloc[-1])
+    库数 = int(d["库数"].iloc[-1]) if "库数" in d.columns else 0   # 分散化前提,缺库要看得见
     收益, rf = d["收益"], d["货基"]
     ret = 收益.dropna()
     nav = (1 + ret.loc["2018":]).cumprod()
@@ -175,8 +176,9 @@ thead td{{color:#888;font-size:11.5px;font-weight:600}}
   <div style="font-size:13px;color:#888;margin-bottom:6px">下一交易日 <b>开盘</b> · 512100 目标仓位</div>
   <div class=pos>{明仓*100:+.1f}%</div>
   <div class=dir>{方向}{'<span class=badge style="background:#fdecea;color:#c0392b">恐慌态·多头已折半</span>' if 恐慌 else ''}</div>
-  <div class=meta>六库原始信号 {p6*100:+.1f}% &nbsp;·&nbsp; ×{a.k} 预算回收后截断至 {明仓*100:+.1f}%
-       &nbsp;·&nbsp; 当前回撤 {当前回撤*100:.1f}%</div>
+  <div class=meta>{库数}/6 库合奏原始信号 {p6*100:+.1f}% &nbsp;·&nbsp; ×{a.k} 预算回收后截断至 {明仓*100:+.1f}%
+       &nbsp;·&nbsp; 当前回撤 {当前回撤*100:.1f}%
+       {'' if 库数 == 6 else f'<b>&nbsp;·&nbsp;⚠ 仅 {库数}/6 库,分散度不足</b>'}</div>
 </div>
 
 <div class=cards>{卡("v5.1 策略 · 2018至今", 全, 色)}{卡(f"策略 · {今年}年内", 年内)}{卡("持有512100 · 2018至今", 持全, "#7f8c8d")}</div>
@@ -223,9 +225,16 @@ A股日内波动占总方差 85% 且前后日不相关,所以两个口径的<b>�
 </div>
 </body></html>"""
 
-    out = os.path.join(桌面, "中证1000_每日面板.html")
+    out = os.path.join(输出目录, "面板.html")
     open(out, "w", encoding="utf-8").write(html)
-    print(f"\n★ 明日开盘目标仓位 {明仓*100:+.1f}%({方向}){' · 恐慌态' if 恐慌 else ''}")
+    # 快照:给早间提醒与快速查看用(纯文本,不依赖浏览器)
+    with open(os.path.join(输出目录, "今日仓位.txt"), "w", encoding="utf-8") as f:
+        f.write(f"信号日\t{信号日.date()}\n目标仓位\t{明仓*100:+.1f}\n方向\t{方向}\n"
+                f"恐慌态\t{'是' if 恐慌 else '否'}\n六库原始\t{p6*100:+.1f}\n"
+                f"库数\t{库数}/6\n"
+                f"生成时间\t{dt.datetime.now():%Y-%m-%d %H:%M}\n")
+    print(f"\n★ 明日开盘目标仓位 {明仓*100:+.1f}%({方向}){' · 恐慌态' if 恐慌 else ''}"
+          f"{'' if 库数 == 6 else f' · ⚠仅{库数}/6库'}")
     print(f"★ 本周(自{上周一.date()})策略 {周策:+.2f}% vs 持有 {周持:+.2f}%")
     print(f"★ 面板: {out}")
     if not os.environ.get("CSI1000_NO_OPEN"):
