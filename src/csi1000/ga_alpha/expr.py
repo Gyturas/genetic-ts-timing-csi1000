@@ -181,3 +181,93 @@ def mutate(node: Node, rng: random.Random, max_depth: int) -> Node:
         child = _replace(node, path, random_leaf(rng))  # 换成一个新的随机字段
 
     return child if depth(child) <= max_depth else node  # 变异后超深则放弃，退回原树
+
+
+# ============================================================================
+# 表达式规范化(canonical form)—— 入库去重与 HOF 去重用
+#
+# 背景:2026-08-05 审计发现 GP 语法层在批量制造【数学恒等但字符串不同】的表达式,
+# 而入库去重 `已有 = {expr_str}` 只按字符串比对,拦不住;相关筛又因资历截断没查到,
+# 于是同卵双胞胎双双入库(实证:六库共 13 对 |Spearman| = 1.0000)。
+# 典型:slog(ts_max(returns,10)) 与 ts_min(neg(returns),10) 完全同一。
+# 详见 docs/因子库缺陷审计.md 的 A6/A7。
+#
+# 原则:【只做可证的化简,宁可漏折叠不可错折叠】。折叠错了会误杀真因子,
+# 漏折叠只是退化回现状(相关筛还有一道)。
+# ============================================================================
+
+# 全局严格单调增的一元算子:经 rolling rank 归一后与原式恒等
+_严格增一元 = ("slog", "ssqrt")
+# 这些算子完全吸收内层的严格增变换(取秩/取极值位置/取极值,单调变换不改变结果)
+_吸收严增 = ("ts_rank", "ts_argmax", "ts_argmin", "ts_cj", "ts_min", "ts_max")
+# 可证恒 ≥0 的叶子(价、量、额、换手、熵、截面离散度/宽度/成交额熵)
+_恒正叶子 = ("open", "high", "low", "close", "volume", "amount", "turnover",
+            "entropy120", "disp", "breadth", "amt_ent")
+# 输出可证恒 ≥0 的算子
+_恒正算子 = ("abs", "ts_std", "ts_rank", "ts_argmax", "ts_argmin", "ts_cj", "ts_er")
+# 参数可交换(字符串不同但完全同一)
+_可交换 = ("add", "mul", "ts_corr")
+# 保正的一元/多元算子(输入恒正 → 输出恒正)
+_保正 = ("ts_mean", "ts_sum", "ts_min", "ts_max", "ema", "delay",
+        "ts_decay_linear", "add", "mul")
+
+
+def _恒正(n: "Node") -> bool:
+    """保守的正性传播:只有能证明恒 ≥0 才返回 True(用于 abs(x)→x)。"""
+    if n.is_leaf:
+        return n.op.removeprefix("field:") in _恒正叶子
+    if n.op in _恒正算子:
+        return True
+    if n.op in _保正:
+        return all(_恒正(c) for c in n.children)
+    return False
+
+
+def _规范(n: "Node") -> "Node":
+    """自底向上把树折叠成规范形。子节点先规范,故每个节点至多触发一层重写。"""
+    if n.is_leaf:
+        return n
+    ch = tuple(_规范(c) for c in n.children)
+    op, w = n.op, n.window
+
+    if op == "neg" and ch[0].op == "neg":                       # neg∘neg → id
+        return ch[0].children[0]
+    if op == "abs" and ch[0].op in ("abs", "neg"):              # abs∘abs→abs, abs∘neg→abs
+        return _规范(Node("abs", (ch[0].children[0],)))
+    if op == "abs" and _恒正(ch[0]):                            # abs(恒正) → 恒正
+        return ch[0]
+    if op == "ts_sum":                                          # ts_sum ≡ w·ts_mean,rank 下恒等
+        return Node("ts_mean", ch, w)
+    if op == "delta":                                           # delta(a,w) ≡ sub(a,delay(a,w))
+        return _规范(Node("sub", (ch[0], Node("delay", (ch[0],), w))))
+    if op == "delay" and ch[0].op == "delay":                   # delay 可加
+        return Node("delay", ch[0].children, w + ch[0].window)
+    if op == "ts_std" and ch[0].op == "neg":                    # ts_std(neg(a)) ≡ ts_std(a)
+        return Node("ts_std", (ch[0].children[0],), w)
+    if op == "ts_argmin":                                       # 实现即 argmax∘neg(ops.py:79)
+        return _规范(Node("ts_argmax", (Node("neg", (ch[0],)),), w))
+    # ts_min(neg(a)) ≡ neg(ts_max(a)):把 neg 提到外层,便于根部统一剥离
+    if op == "ts_min" and ch[0].op == "neg":
+        return _规范(Node("neg", (Node("ts_max", (ch[0].children[0],), w),)))
+    if op == "ts_max" and ch[0].op == "neg":
+        return _规范(Node("neg", (Node("ts_min", (ch[0].children[0],), w),)))
+    if op in _吸收严增 and ch[0].op in _严格增一元:              # 严格增变换被完全吸收
+        return _规范(Node(op, (ch[0].children[0],), w))
+    if op in _可交换:                                            # 交换律:子节点定序
+        ch = tuple(sorted(ch, key=str))
+    return Node(op, ch, w)
+
+
+def 规范式(node: "Node") -> str:
+    """规范形字符串。数学恒等的两棵树必得同一个串(方向号除外)。"""
+    return str(_规范(node))
+
+
+def 去向规范式(node: "Node") -> str:
+    """再剥去根部的方向/单调包装 —— 入库时 sign 按 train_ic 拟合,
+    neg(x) 与 x 拟合后信号完全相同;slog/ssqrt 经 rank 后与原式恒等。
+    这是【入库去重】该用的键:它把"同一个因子的两种写法"判为同一个。"""
+    n = _规范(node)
+    while (not n.is_leaf) and n.op in ("neg",) + _严格增一元:
+        n = n.children[0]
+    return str(n)

@@ -66,6 +66,8 @@ def main():
 
     eng = E.宽基引擎(数据)
     eng.次日收益 = 全开.pct_change(h, fill_method=None).shift(-(h + 1))   # 治理记账的 Y
+    eng.Y丢尾 = h + 1     # A3:Y[t] 用到 t+1+h 日开盘价,决策时点 cutoff 只知 ≤cutoff
+                          # —— 必须与 次日收益 同步设置,否则 _干净Y 会按 close 口径只丢 1 行
     print(f"[开盘挖矿] h={h}  Y=open[T+1+h]/open[T+1]-1  END={C.END}  输出={E.输出目录}")
     eng.run()
 

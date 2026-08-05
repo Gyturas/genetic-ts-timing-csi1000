@@ -41,6 +41,7 @@ from csi1000.walkforward.engine import quarter_list
 TRAILING月 = 12
 黄牌线, 连黄退役, 立即退役线 = 0.0, 2, -0.02
 最少IC月数, 宽限月, 回归自变量上限, 烧机最少 = 18, 12, 40, 8
+尾均最少月 = 8        # 尾均值 的有效月数下限(A9 修复新增,预注册阈值)
 复职冷却季, 复职线, 复职场外最少月 = 4, 0.0225, 12
 RANK窗 = 120
 回看年, 验证年 = 10, 2
@@ -88,9 +89,22 @@ def 混合月度IC(signal: pd.DataFrame, fwd: pd.DataFrame, 最少对: int | Non
     return out
 
 
-def 尾均值(hist: dict, n: int) -> float:
-    vals = [hist[k] for k in sorted(hist)[-n:]]
-    return float(np.mean(vals)) if vals else np.nan
+def 尾均值(hist: dict, n: int, 截月=None) -> float:
+    """trailing n 个【日历月】的均值。
+
+    2026-08-05 审计修复(A9):原实现取 sorted(hist)[-n:] 即"最后 n 条记录",
+    账本缺月时窗口可跨 13~43 个日历月,最坏用 4 年前的 IC 决定今天的生死与权重。
+    改为按日历月截取;有效月数不足 尾均最少月 时返回 nan —— 下游 _体检 把 nan 判黄牌,
+    即"账本太稀就记一次黄牌",而不是静默沿用陈旧值。
+    """
+    if not hist:
+        return np.nan
+    末 = pd.Period(截月, "M") if 截月 is not None else max(pd.Period(k, "M") for k in hist)
+    起 = 末 - (n - 1)
+    vals = [v for k, v in hist.items() if 起 <= pd.Period(k, "M") <= 末]
+    if len(vals) < 尾均最少月:
+        return np.nan
+    return float(np.mean(vals))
 
 
 class 宽基引擎:
@@ -104,6 +118,10 @@ class 宽基引擎:
         self.etf收益 = 数据["etf_ret"][list(self.映射)]
         self.日历 = self.面板["close"].index
         self.次日收益 = self.面板["returns"].shift(-1)
+        # Y 的"决策时点不可得"尾长(A3 修复):close 口径 Y=returns.shift(-1) 用到 t+1 → 丢 1;
+        # 开盘 h 步口径 Y=open[t+1+h]/open[t+1]−1 用到 t+1+h → 丢 h+1。
+        # mine_open_horizons / mine_xsec 覆盖 次日收益 时必须同步设置本值。
+        self.Y丢尾 = 1
         os.makedirs(输出目录, exist_ok=True)
         self.元老记录器 = ArgarchRecorder(self.面板["returns"], os.path.join(输出目录, "argarch"))
         self.季度表 = quarter_list(C.WARMUP_START, C.END)
@@ -152,23 +170,58 @@ class 宽基引擎:
         return [i for i in self._在役()
                 if self.状态["members"][i]["专属"] in (None, 指数)]
 
+    # ---------- 事件 ----------
+    def _事件(self, q, 事件: str, 编号: int, m: dict | None = None, 明细: str = ""):
+        """统一事件写入口(D1 修复)。
+
+        原实现入库事件写 expr[:80]、退役/复职写 name[:60](name 本身已是 expr[:60]),
+        两种截断长度不同且都无编号列 → 14~32% 的入库事件在 CSV 里连不上自己的退役事件,
+        60 字符前缀在库内还有撞名。现在带【编号】(唯一键)+ 不截断的 expr_str。
+        """
+        m = m if m is not None else self.状态["members"][编号]
+        self.状态["events"].append((str(q), 事件, int(编号), m.get("expr_str", m.get("name", "")),
+                                    m.get("kind", ""), m.get("专属"), 明细))
+
     # ---------- 记账 ----------
+    def _干净Y(self, 起, cutoff) -> pd.DataFrame:
+        """决策时点 cutoff 可得的 Y 窗(A3 修复)。
+
+        原实现 self.次日收益.loc[起:cutoff] 直接切全史算好的 Y,末 Y丢尾 行依赖
+        cutoff 之后的价格 —— 这些行进了入库/黄牌/退役/复职判定,使名册不是
+        point-in-time 可复现的。此处按交易日历硬截断。
+        """
+        j = self.日历.searchsorted(cutoff, side="right") - 1 - self.Y丢尾
+        if j < 0:
+            return self.次日收益.iloc[:0]
+        return self.次日收益.loc[起:self.日历[j]]
+
+    @staticmethod
+    def _记账(账: dict, 月账: dict):
+        """写月度 IC。窗口末月的数据不完整,允许被后续季度用更全的数据重算覆盖;
+        其余月份仍用 setdefault(既有值不动),保持 walk-forward 记账的不可回改性。"""
+        if not 月账:
+            return
+        末月 = max(月账)
+        for 月, ic in 月账.items():
+            if 月 == 末月:
+                账[月] = ic
+            else:
+                账.setdefault(月, ic)
+
     def _补账(self, 编号: int, cutoff: pd.Timestamp):
         m = self.状态["members"][编号]
         起 = cutoff - pd.DateOffset(months=16)
-        S = self.信号缓存[编号].loc[起:cutoff]
-        F = self.次日收益.loc[起:cutoff]
+        F = self._干净Y(起, cutoff)
+        S = self.信号缓存[编号].reindex(F.index)
         if m["专属"] is not None:
             F = F[[m["专属"]]]
             S = S[[m["专属"]]] if m["专属"] in S.columns else S
-        for 月, ic in 混合月度IC(S, F).items():
-            m["总账"].setdefault(月, ic)
+        self._记账(m["总账"], 混合月度IC(S, F))
         for 指数 in (self.指数表 if m["专属"] is None else [m["专属"]]):
             if 指数 not in S.columns:
                 continue
-            for 月, ic in 混合月度IC(S[[指数]], F[[指数]] if 指数 in F.columns
-                                    else self.次日收益[[指数]].loc[起:cutoff]).items():
-                m["分账"].setdefault(指数, {}).setdefault(月, ic)
+            F指 = F[[指数]] if 指数 in F.columns else self._干净Y(起, cutoff)[[指数]]
+            self._记账(m["分账"].setdefault(指数, {}), 混合月度IC(S[[指数]], F指))
 
     # ---------- 主循环 ----------
     def run(self):
@@ -235,19 +288,24 @@ class 宽基引擎:
             self._挖与录取(q, qi, cutoff, 起挖, 验证起, 专属, 面板)
 
     def _体检(self, q):
+        # 账本口径的 cutoff 月 = 本季前一个月(体检发生在季初,用截至上季末的账)
+        截月 = (pd.Period(str(q), freq="Q").asfreq("M", "start") - 1)
         for 编号 in self._在役():
             m = self.状态["members"][编号]
-            if len(m["总账"]) < 宽限月:
+            # A8 修复:原判据 len(总账) < 宽限月 是死分支 —— 入库要求 最少IC月数=18 个月账,
+            # 18 > 宽限月=12,永不触发。文档与 walkforward/engine.py 的语义都是
+            # "入库不足 12 个月不考核",故改为日历年龄。
+            if (pd.Period(str(q)) - pd.Period(m["admit_q"])).n < 宽限月 // 3:
                 continue
-            均 = 尾均值(m["总账"], TRAILING月)
+            均 = 尾均值(m["总账"], TRAILING月, 截月)
             if np.isfinite(均) and 均 < 立即退役线:
                 m.update(status="退役", retire_q=str(q), yellow=0)
-                self.状态["events"].append((str(q), "立即退役", m["name"][:60], f"IC={均:+.3f}"))
+                self._事件(q, "立即退役", 编号, m, f"IC={均:+.3f}")
             elif (not np.isfinite(均)) or 均 < 黄牌线:
                 m["yellow"] += 1
                 if m["yellow"] >= 连黄退役:
                     m.update(status="退役", retire_q=str(q), yellow=0)
-                    self.状态["events"].append((str(q), "黄牌退役", m["name"][:60], f"IC={均:+.3f}"))
+                    self._事件(q, "黄牌退役", 编号, m, f"IC={均:+.3f}")
             else:
                 m["yellow"] = 0
 
@@ -268,34 +326,72 @@ class 宽基引擎:
             if not self._残差过关(编号, cutoff, 范围[0] if m["专属"] else None):
                 continue
             m.update(status="在役", reenlist_used=True, yellow=0, retire_q=None)
-            self.状态["events"].append((str(q), "复职", m["name"][:60], f"场外IC={均:+.3f}"))
+            self._事件(q, "复职", 编号, m, f"场外IC={均:+.3f}")
 
     def _残差过关(self, 候选编号, cutoff, 专属) -> bool:
-        """相关筛0.9 + 对现役(权重前40)回归残差月度IC≥0.01。候选编号可为dict(未入册)。"""
+        """相关筛 + 对现役回归取残差后的月度 IC ≥ 残差线。候选编号可为 dict(未入册)。
+
+        2026-08-05 审计后重写,修四条(A1/A2/A5/A10):
+
+        A1 类库结构性判死 —— 原实现把宽窄不一的回归元 stack 后整行 dropna:
+           专属因子只有 1 列、类库候选跨 6 列,支撑集互斥,现役里只要有 ≥2 个不同指数的
+           专属因子行交集就为空 → len(j)<200 → return False,与候选质量无关。
+           实证:六库 46 个季度零类库入库。改为【逐指数残差化】——每个指数上的回归元
+           (self._可用(指数))天然都是该指数单列,对齐无损;6 组残差再拼回面板算月度 IC。
+        A2 同一条路径使 复职(:_复职 对 专属=None 传 None)也恒定失败 ——
+           实证:元老 0/78、类库 GA 0/51 复职,而专属 GA 复职率 35~43%。同修。
+        A5 相关筛不再按资历截断到前 40:全量算 |spearman|,回归元才按 |corr| 取 Top-K。
+        A10 回归元池剔除 elder/argarch —— 生产信号明文剔除它们,让候选去正交化它们是浪费。
+        """
         验证起 = cutoff - pd.DateOffset(years=验证年)
-        if isinstance(候选编号, dict):
-            候选S = 候选编号["S"]
-        else:
-            候选S = self.信号缓存[候选编号]
+        候选S = 候选编号["S"] if isinstance(候选编号, dict) else self.信号缓存[候选编号]
         列 = [专属] if 专属 else self.指数表
         候选S = 候选S[[c for c in 列 if c in 候选S.columns]].loc[验证起:cutoff]
-        现役 = self._可用(专属) if 专属 else self._在役()
-        if not 现役:
-            return True
-        现役 = 现役[:回归自变量上限]
-        y = 候选S.stack().rename("y")
-        xs = pd.concat([self.信号缓存[i][[c for c in 列 if c in self.信号缓存[i].columns]]
-                        .loc[验证起:cutoff].stack().rename(f"x{i}") for i in 现役], axis=1)
-        j = pd.concat([y, xs], axis=1).dropna()
-        if len(j) < 200:
+        if 候选S.empty:
             return False
-        if j.corr(method="spearman")["y"].drop("y").abs().max() > 相关筛:
+        自号 = None if isinstance(候选编号, dict) else 候选编号
+
+        残差列, 最大相关, 有效列 = {}, 0.0, 0
+        for 指数 in 候选S.columns:
+            y = 候选S[指数].dropna()
+            if len(y) < 200:
+                continue
+            有效列 += 1
+            # 该指数上的回归元:_可用 已按指数过滤,全部是含该列的单列/多列因子
+            池 = {}
+            for i in self._可用(指数):
+                if i == 自号 or self.状态["members"][i]["kind"] != "ga":
+                    continue                                  # A10:剔除元老
+                s = self.信号缓存[i]
+                if 指数 in s.columns:
+                    池[i] = s[指数].loc[验证起:cutoff]
+            if not 池:
+                残差列[指数] = y                               # 无回归元,不残差化
+                continue
+            X = pd.DataFrame(池).reindex(y.index)
+            # A5:相关筛【全量、不截断】。corrwith 是逐列 pairwise,不会因某列缺失丢样本
+            ρ = X.corrwith(y, method="spearman").abs().dropna()
+            if len(ρ):
+                最大相关 = max(最大相关, float(ρ.max()))
+            # 回归元按 |corr| 从高到低取前 回归自变量上限 个(不是按资历)
+            取 = list(ρ.sort_values(ascending=False).head(回归自变量上限).index)
+            j = pd.concat([y.rename("y"), X[取]], axis=1).dropna() if 取 else pd.DataFrame()
+            if len(j) < 200:
+                残差列[指数] = y
+                continue
+            A = np.column_stack([np.ones(len(j)), j.iloc[:, 1:].to_numpy()])
+            beta, *_ = np.linalg.lstsq(A, j["y"].to_numpy(), rcond=None)
+            残差列[指数] = pd.Series(j["y"].to_numpy() - A @ beta, index=j.index)
+
+        if 有效列 == 0:
+            self.log(f"  [残差关] 候选在全部 {len(候选S.columns)} 列上样本均 <200,拒")
             return False
-        X = np.column_stack([np.ones(len(j)), j.iloc[:, 1:].to_numpy()])
-        beta, *_ = np.linalg.lstsq(X, j["y"].to_numpy(), rcond=None)
-        残差 = pd.Series(j["y"].to_numpy() - X @ beta, index=j.index).unstack()
-        F = self.次日收益[列].loc[验证起:cutoff]
-        ics = 混合月度IC(残差, F)
+        if 最大相关 > 相关筛:
+            return False
+        if not 残差列:
+            return False
+        F = self._干净Y(验证起, cutoff)
+        ics = 混合月度IC(pd.DataFrame(残差列), F[[c for c in 列 if c in F.columns]])
         return bool(ics) and float(np.mean(list(ics.values()))) >= 残差线
 
     def _挖与录取(self, q, qi, cutoff, 起挖, 验证起, 专属, 面板):
@@ -307,11 +403,20 @@ class 宽基引擎:
                "fitness": {"horizon": 1, "min_coverage": 0.7},
                "split": {"train_end": str(验证起.date()), "valid_end": str(cutoff.date())}}
         hof = run_ga(切片, cfg, log=lambda *a: None)
-        已有 = {m["expr_str"] for m in self.状态["members"].values()}
+        # A6 修复:①按【规范式】去重,不按字符串 —— 原实现拦不住数学恒等但写法不同的
+        # 同卵双胞胎(实测六库 131 对可折叠),相关筛又因资历截断没查到,于是双双入库;
+        # ②按【可见域】过滤 —— 原实现遍历全部 members 不看 专属,导致 zz500 库里一个
+        # 已退役因子永久堵死 zz1000 专属库录取同一表达式。专属库本应彼此独立。
+        可见 = {None, 专属}
+        已有 = {gexpr.去向规范式(m["node"]) for m in self.状态["members"].values()
+                if m.get("kind") == "ga" and m.get("node") is not None
+                and m.get("专属") in 可见}
         列 = [专属] if 专属 else self.指数表
-        统计 = {"考过": 0, "残差拒": 0, "录取": 0}
+        统计 = {"考过": 0, "残差拒": 0, "录取": 0, "重复": 0}
         for e in sorted(hof.entries, key=lambda x: -x["fitness"]):
-            if e["expr"] in 已有:
+            键 = gexpr.去向规范式(e["_tree"])
+            if 键 in 已有:
+                统计["重复"] += 1
                 continue
             候选 = {"name": e["expr"][:60], "expr_str": e["expr"], "node": e["_tree"],
                     "kind": "ga", "sign": float(np.sign(e["train_ic"]) or 1.0), "专属": 专属,
@@ -321,7 +426,8 @@ class 宽基引擎:
                                {k: p[[专属]] for k, p in self.面板.items()}) \
                 .replace([np.inf, -np.inf], np.nan)
             S = (v.rolling(RANK窗).rank(pct=True) * 2 - 1) * 候选["sign"]
-            ics = 混合月度IC(S.loc[验证起:cutoff], self.次日收益[列].loc[验证起:cutoff])
+            F入 = self._干净Y(验证起, cutoff)                    # A3:末 Y丢尾 行决策时不可得
+            ics = 混合月度IC(S.reindex(F入.index), F入[列])
             if len(ics) < 最少IC月数:
                 continue
             均 = float(np.mean(list(ics.values())))
@@ -338,12 +444,13 @@ class 宽基引擎:
             self.状态["members"][编号] = 候选
             self.信号缓存[编号] = S
             self._补账(编号, cutoff)
-            已有.add(e["expr"])
+            已有.add(键)
             库名 = "类库" if 专属 is None else f"专属{专属}"
-            self.状态["events"].append((str(q), "入库", e["expr"][:80],
-                                        f"{库名} IC={均:+.3f} 方向={候选['sign']:+.0f}"))
+            self._事件(q, "入库", 编号, m=候选,
+                       明细=f"{库名} IC={均:+.3f} 方向={候选['sign']:+.0f}")
         self.log(f"  {'类库' if 专属 is None else '专属'+专属}: HOF={len(hof.entries)} "
-                 f"考过={统计['考过']} 残差拒={统计['残差拒']} 录取={统计['录取']}")
+                 f"重复={统计['重复']} 考过={统计['考过']} "
+                 f"残差拒={统计['残差拒']} 录取={统计['录取']}")
 
     # ---------- 仓位与结算 ----------
     def _仓位与结算(self, q, cutoff, 季日):
@@ -460,10 +567,14 @@ class 宽基引擎:
         ex[~ex.index.duplicated(keep="last")].to_csv(os.path.join(输出目录, "资产暴露.csv"))
         fz = pd.DataFrame({d: v for d, v in self.状态["分资产"]}).T.sort_index()
         fz[~fz.index.duplicated(keep="last")].to_csv(os.path.join(输出目录, "分资产逐日.csv"))
-        pd.DataFrame(self.状态["events"], columns=["季度", "事件", "名称", "明细"]) \
+        # D1 修复:事件带【编号】(唯一键,可与名册 join)+ 不截断的表达式;
+        # 兼容旧存档的 4 元组(季度,事件,名称,明细),补空编号。
+        ev = [e if len(e) == 7 else (e[0], e[1], None, e[2], "", None, e[3])
+              for e in self.状态["events"]]
+        pd.DataFrame(ev, columns=["季度", "事件", "编号", "表达式", "kind", "专属", "明细"]) \
             .to_csv(os.path.join(输出目录, "事件.csv"), index=False)
-        名册 = [{k: m.get(k) for k in ("编号", "name", "kind", "sign", "专属", "elder",
-                                      "admit_q", "status", "retire_q", "yellow")}
+        名册 = [{k: m.get(k) for k in ("编号", "name", "expr_str", "kind", "sign", "专属",
+                                      "elder", "admit_q", "status", "retire_q", "yellow")}
                for m in self.状态["members"].values()]
         pd.DataFrame(名册).to_csv(os.path.join(输出目录, "名册.csv"), index=False)
         self.log("导出:", 输出目录)
