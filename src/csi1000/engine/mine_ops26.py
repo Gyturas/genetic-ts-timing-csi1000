@@ -27,13 +27,15 @@ def main():
     ap.add_argument("--end", default=None)
     a = ap.parse_args()
 
-    根 = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     import csi1000.engine.index_engine as E
     from csi1000.walkforward import config as C
+    from csi1000 import paths
     if a.end:
         C.END = a.end
 
-    E.输出目录 = os.path.join(根, "结果_26算子")
+    # 原写死 os.path.join(根, "结果_26算子"),而 根 = src/csi1000 —— 产物会落到
+    # src/csi1000/结果_26算子/,不是仓库的 results/ops26/。改用 paths 统一口径。
+    E.输出目录 = paths.结果_26算子
     E.安装GA()
 
     import csi1000.ga_alpha.ops as gops
