@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""每日面板(v5.1):更新行情+个股 → 六库合奏+状态层 → 明日仓位 → 桌面 HTML。
+"""每日面板(v5.2):更新行情+个股 → 四库合奏(旧叶双种子)+状态层 → 明日仓位 → 桌面 HTML。
 
 流程:①更新13标的行情 ②更新个股面板与截面叶子(状态层所需)③重算六库信号
       ④状态层调制 ⑤生成面板
@@ -61,8 +61,9 @@ def main():
         import csi1000.engine.update_stocks as us
         us.main()
     print("③ 重算六库信号 + 状态层(约5分钟)…")
-    from csi1000.engine.live_v51 import 算
+    from csi1000.engine.live_v51 import 算, 六库
     d = 算(a.k)
+    库总 = len(六库)
 
     import csi1000.engine.strategy as st
     zz = pd.read_csv(os.path.join(paths.行情缓存, "idx_sh000852.csv"),
@@ -114,7 +115,7 @@ def main():
 
     # ---- 图 ----
     fig, ax = plt.subplots(figsize=(9, 3.6))
-    ax.plot(nav, lw=2, color="#c0392b", label=f"v5.1 策略 ({nav.iloc[-1]:.1f}×)")
+    ax.plot(nav, lw=2, color="#c0392b", label=f"v5.2 策略 ({nav.iloc[-1]:.1f}×)")
     ax.plot(持nav, lw=1.2, ls="--", color="#95a5a6", label=f"持有512100 ({持nav.iloc[-1]:.1f}×)")
     ax.set_yscale("log"); ax.legend(fontsize=9); ax.grid(alpha=.3)
     ax.set_title("净值(对数轴,2018起,open→open 含成本)", fontsize=11)
@@ -170,18 +171,18 @@ thead td{{color:#888;font-size:11.5px;font-weight:600}}
 </style></head><body>
 
 <h1>中证1000 时序择时 · 每日面板</h1>
-<div class=sub>v5.1(六库合奏 + 状态层风险预算回收,k={a.k}) · 信号日 {信号日.date()} · 生成 {dt.datetime.now():%Y-%m-%d %H:%M}</div>
+<div class=sub>v5.2(四库合奏·旧叶双种子 + 状态层风险预算回收,k={a.k}) · 信号日 {信号日.date()} · 生成 {dt.datetime.now():%Y-%m-%d %H:%M}</div>
 
 <div class=hero>
   <div style="font-size:13px;color:#888;margin-bottom:6px">下一交易日 <b>开盘</b> · 512100 目标仓位</div>
   <div class=pos>{明仓*100:+.1f}%</div>
   <div class=dir>{方向}{'<span class=badge style="background:#fdecea;color:#c0392b">恐慌态·多头已折半</span>' if 恐慌 else ''}</div>
-  <div class=meta>{库数}/6 库合奏原始信号 {p6*100:+.1f}% &nbsp;·&nbsp; ×{a.k} 预算回收后截断至 {明仓*100:+.1f}%
+  <div class=meta>{库数}/{库总} 库合奏原始信号 {p6*100:+.1f}% &nbsp;·&nbsp; ×{a.k} 预算回收后截断至 {明仓*100:+.1f}%
        &nbsp;·&nbsp; 当前回撤 {当前回撤*100:.1f}%
-       {'' if 库数 == 6 else f'<b>&nbsp;·&nbsp;⚠ 仅 {库数}/6 库,分散度不足</b>'}</div>
+       {'' if 库数 == 库总 else f'<b>&nbsp;·&nbsp;⚠ 仅 {库数}/{库总} 库,分散度不足</b>'}</div>
 </div>
 
-<div class=cards>{卡("v5.1 策略 · 2018至今", 全, 色)}{卡(f"策略 · {今年}年内", 年内)}{卡("持有512100 · 2018至今", 持全, "#7f8c8d")}</div>
+<div class=cards>{卡("v5.2 策略 · 2018至今", 全, 色)}{卡(f"策略 · {今年}年内", 年内)}{卡("持有512100 · 2018至今", 持全, "#7f8c8d")}</div>
 
 <div class=note>
 <b>为什么这里的日收益和同花顺对不上?</b> 同花顺显示的是<b>指数收盘→收盘</b>,本策略在
@@ -231,10 +232,10 @@ A股日内波动占总方差 85% 且前后日不相关,所以两个口径的<b>�
     with open(os.path.join(输出目录, "今日仓位.txt"), "w", encoding="utf-8") as f:
         f.write(f"信号日\t{信号日.date()}\n目标仓位\t{明仓*100:+.1f}\n方向\t{方向}\n"
                 f"恐慌态\t{'是' if 恐慌 else '否'}\n六库原始\t{p6*100:+.1f}\n"
-                f"库数\t{库数}/6\n"
+                f"库数\t{库数}/{库总}\n"
                 f"生成时间\t{dt.datetime.now():%Y-%m-%d %H:%M}\n")
     print(f"\n★ 明日开盘目标仓位 {明仓*100:+.1f}%({方向}){' · 恐慌态' if 恐慌 else ''}"
-          f"{'' if 库数 == 6 else f' · ⚠仅{库数}/6库'}")
+          f"{'' if 库数 == 库总 else f' · ⚠仅{库数}/{库总}库'}")
     print(f"★ 本周(自{上周一.date()})策略 {周策:+.2f}% vs 持有 {周持:+.2f}%")
     print(f"★ 面板: {out}")
     if not os.environ.get("CSI1000_NO_OPEN"):

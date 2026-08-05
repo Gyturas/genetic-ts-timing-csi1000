@@ -25,3 +25,6 @@ results/state/
 logs/
 面板.html
 今日仓位.txt
+
+# 重挖前的旧库备份(仅本地留档,勿入库——git 历史里已有旧 ops26,mine_* 从未跟踪)
+旧库_A批前/
