@@ -66,15 +66,19 @@ def _取json(url: str) -> dict | None:
     return None
 
 
-def _拉_cjpy(secid: str, fqt: int) -> pd.DataFrame | None:
-    """首选:cjpy(天软官方源)。fqt 0=不复权(指数) / 1=前复权(ETF),已验证收益率与东财一致。"""
+def _拉_cjpy(secid: str, fqt: int, 起: str | None = None) -> pd.DataFrame | None:
+    """首选:cjpy(天软官方源)。fqt 0=不复权(指数) / 1=前复权(ETF),已验证收益率与东财一致。
+    起:增量起点,应取【存量末日往前几天】以保证与存量有重叠。
+    曾经写死"今天往前15天"(2026-09-17 翻车):断更超过约10个交易日后新旧零重叠,
+    重叠校验必然失败且报成"口径不符",管线永久卡死、无法自愈。"""
     wind = _WIND.get(secid)
     if wind is None:
         return None
     try:
         import cjpy
         import datetime as _dt
-        起 = (_dt.date.today() - _dt.timedelta(days=15)).strftime("%Y-%m-%d")  # 拉近15天,增量拼接够用
+        if 起 is None:
+            起 = (_dt.date.today() - _dt.timedelta(days=15)).strftime("%Y-%m-%d")
         d = cjpy.get_market_data(code=wind, start=起, end="2050-01-01",
                                  cycle="day", rate="前复权" if fqt == 1 else "不复权")
         d = pd.DataFrame({
@@ -88,8 +92,8 @@ def _拉_cjpy(secid: str, fqt: int) -> pd.DataFrame | None:
         return None
 
 
-def _拉(secid: str, fqt: int) -> pd.DataFrame:
-    d = _拉_cjpy(secid, fqt)
+def _拉(secid: str, fqt: int, 起: str | None = None) -> pd.DataFrame:
+    d = _拉_cjpy(secid, fqt, 起)
     if d is not None:
         return d
     # 回退:东财公开接口(cjpy 不可用/无 token 时兜底)
@@ -125,8 +129,9 @@ def _更新(tag: str, secid: str, 是指数: bool, 报告: list) -> None:
         if not os.path.exists(fp):
             continue
         旧全 = pd.read_csv(fp, parse_dates=["date"]).set_index("date")
-        新 = _拉(secid, 0) if 是指数 else None
-        权 = _拉(secid, 1) if not 是指数 else None
+        起 = (旧全.index.max() - pd.Timedelta(days=10)).strftime("%Y-%m-%d")   # 从存量末日接,留重叠
+        新 = _拉(secid, 0, 起) if 是指数 else None
+        权 = _拉(secid, 1, 起) if not 是指数 else None
         通过 = False
         # 数据商偶发"当日收盘初值次日修订"(2026-07-29 实例):最近≤2行与新数据不符时,
         # 若剔除尾行后重叠段一致,则信任新拉数据、替换被修订的尾行;更早处的不符仍视为
@@ -164,6 +169,10 @@ def _更新(tag: str, secid: str, 是指数: bool, 报告: list) -> None:
             通过 = True; 修 = max(修, 剔)
             break
         if not 通过:
+            源 = 新 if 是指数 else 权
+            if len(旧全.index.intersection(源.index)) < 2:
+                报告.append(f"{tag}: ✗与存量无重叠(存量末{旧全.index.max().date()},"
+                            f"新数据起{源.index.min().date()}),跳过"); return
             报告.append(f"{tag}: ✗重叠口径不符(非尾部修订),跳过"); return
         if len(增) == 0 and 剔 == 0:
             末 = 旧.index.max().date()
